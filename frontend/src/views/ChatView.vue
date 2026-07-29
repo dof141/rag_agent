@@ -151,8 +151,8 @@
           </div>
         </div>
 
-        <!-- Thinking Loading Box with Real Node Status Tracker -->
-        <div v-if="isThinking" class="message-row assistant">
+        <!-- Thinking Loading Box with Real Node Status Tracker (仅在阻塞全量模式下显示) -->
+        <div v-if="isThinking && !isStreamMode" class="message-row assistant">
           <div class="msg-avatar"><Bot /></div>
           <div class="msg-card thinking-card-box">
             <div class="thinking-header">
