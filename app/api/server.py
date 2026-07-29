@@ -119,11 +119,30 @@ class RAGServerManager:
         app.mount("/mcp", mcp.sse_app())
 
     def _setup_static_frontend(self):
-        """挂载打包后的 Vue 3 统一前端静态产物 (frontend/dist)"""
+        """挂载打包后的 Vue 3 统一前端静态产物 (frontend/dist)，支持 SPA 路由兜底"""
         dist_path = PROJECT_ROOT / "frontend" / "dist"
         if dist_path.exists():
             logger.info(f"成功托管 Vue 3 统一前端，路径为：{dist_path}")
-            self.app.mount("/", StaticFiles(directory=str(dist_path), html=True), name="frontend")
+            assets_path = dist_path / "assets"
+            if assets_path.exists():
+                self.app.mount("/assets", StaticFiles(directory=str(assets_path)), name="static_assets")
+
+            @self.app.get("/{full_path:path}", include_in_schema=False)
+            async def serve_spa_frontend(full_path: str):
+                # 排除所有后端业务 API 请求，避免强行返回 HTML
+                if full_path.startswith(("api/", "query", "upload", "status", "stream", "history", "health", "mcp", "docs", "openapi.json")):
+                    raise HTTPException(status_code=404, detail="API Not Found")
+                
+                # 若请求的是的具体静态文件（如 favicon.ico），直接返回
+                target_file = dist_path / full_path
+                if target_file.exists() and target_file.is_file():
+                    return FileResponse(target_file)
+                
+                # Vue 3 SPA 单页应用路由兜底：一律返回 index.html
+                index_file = dist_path / "index.html"
+                if index_file.exists():
+                    return FileResponse(index_file)
+                raise HTTPException(status_code=404, detail="Frontend index.html not found")
         else:
             logger.warning(f"前端构建产物未找到 ({dist_path})，请先在 frontend 目录执行 npm run build")
 
