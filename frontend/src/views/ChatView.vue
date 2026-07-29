@@ -42,6 +42,19 @@
         >
           {{ q }}
         </button>
+
+        <div class="stream-mode-container">
+          <button 
+            class="stream-toggle-btn"
+            :class="{ active: isStreamMode }"
+            @click="toggleStreamMode"
+            :title="isStreamMode ? '当前：打字机流式输出模式 (可实时展示回答及节点耗时)' : '当前：阻塞全量模式 (等待全部节点执行完成一次性返回)'"
+          >
+            <Zap class="mode-icon" v-if="isStreamMode" />
+            <Box class="mode-icon" v-else />
+            <span>{{ isStreamMode ? '⚡ 打字机流式模式' : '📦 阻塞全量模式' }}</span>
+          </button>
+        </div>
       </div>
 
       <!-- Messages Stream Viewport -->
@@ -106,7 +119,10 @@
             </div>
 
             <!-- Markdown Answer Content + Smart Auto Image Rendering -->
-            <div class="msg-body markdown-body" v-html="renderMarkdown(msg.text)"></div>
+            <div class="msg-body-wrapper">
+              <div class="msg-body markdown-body" v-html="renderMarkdown(msg.text)"></div>
+              <span v-if="msg.isStreaming" class="typewriter-cursor">▌</span>
+            </div>
 
             <!-- Citations & Sources (Recall Sources) -->
             <div v-if="msg.sources && msg.sources.length" class="sources-panel">
@@ -214,7 +230,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, nextTick } from 'vue'
-import { Plus, MessageSquare, Trash2, Bot, User, Send, FileText, Activity, Check, Loader2, Cpu, ChevronDown, ChevronRight } from 'lucide-vue-next'
+import { Plus, MessageSquare, Trash2, Bot, User, Send, FileText, Activity, Check, Loader2, Cpu, ChevronDown, ChevronRight, Zap, Box } from 'lucide-vue-next'
 import type { ChatSession, ChatMessage, CandidateItem, ChunkSource, KBChunk } from '../types'
 import { api } from '../services/api'
 import { renderMarkdown } from '../utils/markdown'
@@ -249,6 +265,13 @@ const inputQuery = ref<string>('')
 const isThinking = ref<boolean>(false)
 const activeNodeText = ref<string>('正在启动 LangGraph 节点处理流...')
 const activeNodeSteps = ref<NodeStep[]>([])
+
+const isStreamMode = ref<boolean>(localStorage.getItem('rag_is_stream') !== 'false')
+
+const toggleStreamMode = () => {
+  isStreamMode.value = !isStreamMode.value
+  localStorage.setItem('rag_is_stream', String(isStreamMode.value))
+}
 
 const showCandidateSelector = ref<boolean>(false)
 const activeCandidates = ref<CandidateItem[]>([])
@@ -390,7 +413,8 @@ const sendUserMessage = async () => {
   activeNodeSteps.value = REAL_BACKEND_NODES.map(n => ({ ...n, status: 'pending', duration: undefined }))
   activeNodeSteps.value[0].status = 'running'
 
-  const res = await api.sendQuery(query, sid)
+  const isStream = isStreamMode.value
+  const res = await api.sendQuery(query, sid, isStream)
   pendingRequestId.value = res.request_id || ''
 
   if (res.awaiting_confirmation && res.candidates && res.candidates.length > 0) {
@@ -407,48 +431,121 @@ const sendUserMessage = async () => {
     return
   }
 
-  let isDone = false
-  let pollAttempts = 0
-  while (!isDone && pollAttempts < 300) {
-    await new Promise(r => setTimeout(r, 500))
-    pollAttempts++
-    const isPaused = await pollTaskNodeStatus(res.request_id)
-    if (isPaused) {
-      isThinking.value = false
-      showCandidateSelector.value = true
-      return
-    }
-    if (activeNodeSteps.value.every(n => n.status === 'completed')) {
-      isDone = true
-    }
-  }
+  if (isStream) {
+    // ----------------------------------------------------
+    // ⚡ 流式打字机模式：创建占位消息，建立 SSE 实时监听
+    // ----------------------------------------------------
+    const assistMsgId = `m-ast-${Date.now()}`
+    const assistantMsgIndex = messages.value.length
+    messages.value.push({
+      id: assistMsgId,
+      role: 'assistant',
+      text: '',
+      timestamp: Date.now() / 1000,
+      node_steps: JSON.parse(JSON.stringify(activeNodeSteps.value)),
+      isStreaming: true
+    })
+    scrollToBottom()
 
-  isThinking.value = false
+    const sseUrl = `${location.protocol}//${location.host}/stream/${res.request_id}`
+    const es = new EventSource(sseUrl)
 
-  // 从后端同步最新的完整会话记录（重试等待 MongoDB 异步落盘完成）
-  let sessionDetail = await api.getSessionDetail(sid)
-  let lastMsg = sessionDetail?.messages?.length ? sessionDetail.messages[sessionDetail.messages.length - 1] : null
+    es.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data)
 
-  let retries = 0
-  while ((!lastMsg || lastMsg.role !== 'assistant') && retries < 20) {
-    await new Promise(r => setTimeout(r, 400))
-    retries++
-    sessionDetail = await api.getSessionDetail(sid)
-    lastMsg = sessionDetail?.messages?.length ? sessionDetail.messages[sessionDetail.messages.length - 1] : null
-  }
+        if (payload.status === 'completed' || payload.event === 'final') {
+          if (payload.answer) messages.value[assistantMsgIndex].text = payload.answer
+          if (payload.sources) messages.value[assistantMsgIndex].sources = payload.sources
+          if (payload.image_urls) messages.value[assistantMsgIndex].image_urls = payload.image_urls
+          if (payload.total_duration) messages.value[assistantMsgIndex].total_duration = payload.total_duration
+          if (payload.node_steps) messages.value[assistantMsgIndex].node_steps = payload.node_steps
+          
+          messages.value[assistantMsgIndex].isStreaming = false
+          isThinking.value = false
+          es.close()
+          scrollToBottom()
+          loadSessions()
+          return
+        }
 
-  if (sessionDetail && sessionDetail.messages && sessionDetail.messages.length > 0) {
-    const lastMessage = sessionDetail.messages[sessionDetail.messages.length - 1]
-    if (lastMessage.role === 'assistant') {
-      messages.value = sessionDetail.messages
-      // 如果后端没返回带 duration 的 node_steps，才用 activeNodeSteps 兜底
-      if (!lastMessage.node_steps || !lastMessage.node_steps.length || !lastMessage.node_steps.some((s: any) => s.duration !== undefined)) {
-        messages.value[messages.value.length - 1].node_steps = JSON.parse(JSON.stringify(activeNodeSteps.value))
+        if (payload.delta) {
+          messages.value[assistantMsgIndex].text += payload.delta
+          scrollToBottom()
+        }
+
+        if (payload.done_list || payload.running_list) {
+          const doneList = payload.done_list || []
+          const runningList = payload.running_list || []
+          const nodeDurations = payload.node_durations || {}
+
+          activeNodeSteps.value.forEach(node => {
+            const isDone = doneList.some((d: string) => d === node.name || d === node.node_id)
+            const isRunning = runningList.some((r: string) => r === node.name || r === node.node_id)
+            if (isDone) node.status = 'completed'
+            else if (isRunning) node.status = 'running'
+            if (nodeDurations[node.node_id] !== undefined) node.duration = nodeDurations[node.node_id]
+          })
+          messages.value[assistantMsgIndex].node_steps = JSON.parse(JSON.stringify(activeNodeSteps.value))
+        }
+      } catch (e) {
+        console.error('SSE 数据解析错误', e)
       }
     }
+
+    es.onerror = () => {
+      es.close()
+      isThinking.value = false
+      if (messages.value[assistantMsgIndex]) {
+        messages.value[assistantMsgIndex].isStreaming = false
+      }
+    }
+  } else {
+    // ----------------------------------------------------
+    // 📦 阻塞全量模式：轮询等待，一次性同步返回
+    // ----------------------------------------------------
+    let isDone = false
+    let pollAttempts = 0
+    while (!isDone && pollAttempts < 300) {
+      await new Promise(r => setTimeout(r, 500))
+      pollAttempts++
+      const isPaused = await pollTaskNodeStatus(res.request_id)
+      if (isPaused) {
+        isThinking.value = false
+        showCandidateSelector.value = true
+        return
+      }
+      if (activeNodeSteps.value.every(n => n.status === 'completed')) {
+        isDone = true
+      }
+    }
+
+    isThinking.value = false
+
+    // 从后端同步最新的完整会话记录（重试等待 MongoDB 异步落盘完成）
+    let sessionDetail = await api.getSessionDetail(sid)
+    let lastMsg = sessionDetail?.messages?.length ? sessionDetail.messages[sessionDetail.messages.length - 1] : null
+
+    let retries = 0
+    while ((!lastMsg || lastMsg.role !== 'assistant') && retries < 20) {
+      await new Promise(r => setTimeout(r, 400))
+      retries++
+      sessionDetail = await api.getSessionDetail(sid)
+      lastMsg = sessionDetail?.messages?.length ? sessionDetail.messages[sessionDetail.messages.length - 1] : null
+    }
+
+    if (sessionDetail && sessionDetail.messages && sessionDetail.messages.length > 0) {
+      const lastMessage = sessionDetail.messages[sessionDetail.messages.length - 1]
+      if (lastMessage.role === 'assistant') {
+        messages.value = sessionDetail.messages
+        if (!lastMessage.node_steps || !lastMessage.node_steps.length || !lastMessage.node_steps.some((s: any) => s.duration !== undefined)) {
+          messages.value[messages.value.length - 1].node_steps = JSON.parse(JSON.stringify(activeNodeSteps.value))
+        }
+      }
+    }
+    scrollToBottom()
+    await loadSessions()
   }
-  scrollToBottom()
-  await loadSessions()
 }
 
 const onCandidateConfirmed = async (candidateName: string) => {
@@ -686,8 +783,65 @@ const scrollToBottom = () => {
 }
 
 .sample-chip:hover {
-  border-color: #6366f1;
-  color: #6366f1;
+  background: rgba(168, 85, 247, 0.15);
+  border-color: #a855f7;
+  color: #c084fc;
+}
+
+.stream-mode-container {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.stream-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  border-radius: 16px;
+  padding: 4px 12px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.25s ease;
+}
+
+.stream-toggle-btn.active {
+  background: rgba(168, 85, 247, 0.15);
+  border-color: rgba(168, 85, 247, 0.4);
+  color: #c084fc;
+  box-shadow: 0 0 10px rgba(168, 85, 247, 0.2);
+}
+
+.stream-toggle-btn:hover {
+  border-color: #a855f7;
+}
+
+.mode-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.msg-body-wrapper {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+}
+
+.typewriter-cursor {
+  display: inline-block;
+  color: #a855f7;
+  font-weight: bold;
+  margin-left: 2px;
+  font-size: 1.1rem;
+  animation: blink 0.8s infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 .messages-viewport {

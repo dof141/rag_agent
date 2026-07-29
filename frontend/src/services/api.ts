@@ -247,7 +247,7 @@ export const api = {
   },
 
   // === 真实智能问答与断点确认 API ===
-  async sendQuery(query: string, sessionId?: string): Promise<{
+  async sendQuery(query: string, sessionId?: string, isStream: boolean = true): Promise<{
     session_id: string
     request_id: string
     answer?: string
@@ -259,7 +259,7 @@ export const api = {
       const res = await fetch(`${API_BASE}/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, session_id: sid, is_stream: false })
+        body: JSON.stringify({ query, session_id: sid, is_stream: isStream })
       })
 
       if (res.ok) {

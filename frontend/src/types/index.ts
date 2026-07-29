@@ -9,6 +9,7 @@ export interface ChatMessage {
   sources?: ChunkSource[]
   node_steps?: any[]
   total_duration?: number
+  isStreaming?: boolean
   isStepsCollapsed?: boolean
 }
 
