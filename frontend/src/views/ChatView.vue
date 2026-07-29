@@ -229,6 +229,7 @@ interface NodeStep {
   node_id: string
   name: string
   status: 'pending' | 'running' | 'completed' | 'paused'
+  duration?: number
 }
 
 const REAL_BACKEND_NODES: NodeStep[] = [
@@ -331,6 +332,7 @@ const pollTaskNodeStatus = async (taskId: string): Promise<boolean> => {
   const runningList = statusRes.running_list || []
   const currentGlobalStatus = statusRes.status
 
+  const nodeDurations = statusRes.node_durations || {}
   activeNodeSteps.value.forEach(node => {
     const cnName = node.name
     // 全精确比对，防止子串“切片搜索”误将“切片搜索(假设性文档)”点亮
@@ -341,6 +343,10 @@ const pollTaskNodeStatus = async (taskId: string): Promise<boolean> => {
       node.status = 'completed'
     } else if (isRunning) {
       node.status = 'running'
+    }
+
+    if (nodeDurations[node.node_id] !== undefined) {
+      node.duration = nodeDurations[node.node_id]
     }
   })
 
@@ -381,7 +387,7 @@ const sendUserMessage = async () => {
   })
   scrollToBottom()
 
-  activeNodeSteps.value = REAL_BACKEND_NODES.map(n => ({ ...n, status: 'pending' }))
+  activeNodeSteps.value = REAL_BACKEND_NODES.map(n => ({ ...n, status: 'pending', duration: undefined }))
   activeNodeSteps.value[0].status = 'running'
 
   const res = await api.sendQuery(query, sid)
@@ -435,7 +441,10 @@ const sendUserMessage = async () => {
     const lastMessage = sessionDetail.messages[sessionDetail.messages.length - 1]
     if (lastMessage.role === 'assistant') {
       messages.value = sessionDetail.messages
-      messages.value[messages.value.length - 1].node_steps = JSON.parse(JSON.stringify(activeNodeSteps.value))
+      // 如果后端没返回带 duration 的 node_steps，才用 activeNodeSteps 兜底
+      if (!lastMessage.node_steps || !lastMessage.node_steps.length || !lastMessage.node_steps.some((s: any) => s.duration !== undefined)) {
+        messages.value[messages.value.length - 1].node_steps = JSON.parse(JSON.stringify(activeNodeSteps.value))
+      }
     }
   }
   scrollToBottom()

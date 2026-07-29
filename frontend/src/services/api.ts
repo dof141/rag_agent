@@ -234,7 +234,7 @@ export const api = {
     localStorage.removeItem(TASKS_STORAGE_KEY)
   },
 
-  async getTaskStatus(taskId: string): Promise<{ status: string; done_list: string[]; running_list: string[] }> {
+  async getTaskStatus(taskId: string): Promise<{ status: string; done_list: string[]; running_list: string[]; node_durations?: Record<string, number>; total_duration?: number }> {
     try {
       const res = await fetch(`${API_BASE}/status/${taskId}`)
       if (res.ok) {
@@ -243,7 +243,7 @@ export const api = {
     } catch {
       // 忽略
     }
-    return { status: 'processing', done_list: [], running_list: [] }
+    return { status: 'processing', done_list: [], running_list: [], node_durations: {}, total_duration: 0 }
   },
 
   // === 真实智能问答与断点确认 API ===
@@ -439,7 +439,8 @@ export const api = {
             item_names: item.item_names || [],
             image_urls: item.image_urls || [],
             sources: item.sources || [],
-            node_steps: item.node_steps || []
+            node_steps: item.node_steps || [],
+            total_duration: item.total_duration
           }))
           return session
         }

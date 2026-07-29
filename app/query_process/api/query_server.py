@@ -196,6 +196,7 @@ def get_task_history(sessionId: str, limit: int = 10):
                 "image_urls": r.get("image_urls", []),
                 "sources": r.get("sources", []),
                 "node_steps": r.get("node_steps", []),
+                "total_duration": r.get("total_duration", 0.0),
                 "ts": r.get("ts")
             })
         return {"session_id": sessionId, "items": items}
