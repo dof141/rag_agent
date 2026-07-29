@@ -24,9 +24,9 @@ def node_search_embedding(state):
     # 向量化
     query_dict = generate_embeddings([rewritten_query])
 
-    quoted = ", ".join(f'"{v}"' for v in item_names)
-    # 构造最终过滤表达式
-    expr = f"item_name in [{quoted}]"
+    quoted = ", ".join(f'"{v}"' for v in item_names) if item_names else ""
+    # 构造最终过滤表达式（如果 item_names 为空，则全局无过滤检索）
+    expr = f"item_name in [{quoted}]" if item_names else None
     # 设置request
     reqs = create_hybrid_search_requests(
         dense_vector=query_dict['dense'][0],

@@ -29,27 +29,31 @@ def step_3_llm_item_name_and_rewrite_query(original_query, history_chats)  ->Goo
     """
     负责让大模型提取出问题中的课程/资料实体名称并重写 Query
     """
-    try:
-        contents = ""
-        for chat in history_chats:
-            item_str = ",".join(chat.get('item_names', [])) if chat.get('item_names') else "无"
-            contents += f"角色:{chat.get('role')}, 内容:{chat.get('text')}, 重写问题:{chat.get('rewritten_query', '')}, 关联主体:{item_str};\n"
+    for attempt in range(1, 4):
+        try:
+            contents = ""
+            for chat in history_chats:
+                item_str = ",".join(chat.get('item_names', [])) if chat.get('item_names') else "无"
+                contents += f"角色:{chat.get('role')}, 内容:{chat.get('text')}, 重写问题:{chat.get('rewritten_query', '')}, 关联主体:{item_str};\n"
 
-        prompt = load_prompt("rewritten_query_and_itemnames", history_text=contents, query=original_query)
-        messages = [HumanMessage(content=prompt)]
+            prompt = load_prompt("rewritten_query_and_itemnames", history_text=contents, query=original_query)
+            messages = [HumanMessage(content=prompt)]
 
-        llm = get_llm_client(json_mode=True)
-        parser = PydanticOutputParser(pydantic_object=GoodsResponse)
-        chain = llm | parser
+            llm = get_llm_client(json_mode=True)
+            parser = PydanticOutputParser(pydantic_object=GoodsResponse)
+            chain = llm | parser
 
-        response = chain.invoke(messages)
-        logger.info(f"已经完成问题的重写和item_name 的提取，结果为：{response}")
-        return response
+            response = chain.invoke(messages)
+            logger.info(f"已经完成问题的重写和item_name 的提取，结果为：{response}")
+            return response
 
-    except Exception as e:
-        logger.error(f"step_3 执行失败: {e}")
-        # 降级容错方案：如果 LLM 解析失败，不直接抛异常断开，而是兜底返回原始 Query
-        return GoodsResponse(item_names=[], rewritten_query=original_query)
+        except Exception as e:
+            logger.warning(f"step_3 第 {attempt}/3 次执行失败: {e}")
+            if attempt < 3:
+                time.sleep(1.0)
+            else:
+                logger.error(f"step_3 最终执行失败，触发全局无过滤向量检索容错逻辑: {e}")
+                return GoodsResponse(item_names=[], rewritten_query=original_query)
 
 
 def step_4_vectorize_and_query(item_names:List[str]) ->List[Dict]:
@@ -188,10 +192,10 @@ def step_6_deal_list(state: QueryGraphState, item_results, history_chats, rewrit
         logger.info(f"有可选的item_name: {optional_item}")
         return state
 
-    # 3. 彻底未搜到相关笔记或学习资料
-    state['answer'] = "未在私有笔记库中检索到相关学习资料或笔记主题，请尝试转换关键词或提供更具体的知识点名称。"
+    # 3. 未识别到特定 item_name，将开启全局无过滤向量检索容错逻辑
+    state['answer'] = None
     state['item_names'] = []
-    logger.info(f"没有检测到匹配的item_name, 当前结果: {item_results}")
+    logger.info(f"未匹配到明确的 item_name，开启全局无过滤向量检索，当前结果: {item_results}")
     return state
 
 def node_item_name_confirm(state: QueryGraphState,):

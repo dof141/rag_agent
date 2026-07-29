@@ -65,9 +65,9 @@ def step_2_search_embedding_hyde(
     #向量化
     logger.info("Step 2: 正在生成混合向量 (Embedding)...")
     embedding_contents = generate_embeddings([combined_text])
-    quoted = ", ".join(f'"{v}"' for v in item_names)
-    # 构造最终过滤表达式
-    expr = f"item_name in [{quoted}]"
+    quoted = ", ".join(f'"{v}"' for v in item_names) if item_names else ""
+    # 构造最终过滤表达式（如果 item_names 为空，则全局无过滤检索）
+    expr = f"item_name in [{quoted}]" if item_names else None
     #设置request
     res = create_hybrid_search_requests(
         dense_vector=embedding_contents['dense'][0],
