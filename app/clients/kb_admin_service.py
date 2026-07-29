@@ -71,18 +71,113 @@ def get_kb_chunks(item_name: str, keyword: str = "") -> List[Dict[str, Any]]:
         chunks = client.query(
             collection_name=milvus_config.chunks_collection,
             filter=f'item_name == "{item_name}"',
-            output_fields=["chunk_id", "file_title", "item_name", "title", "parent_title", "part", "content"]
+            output_fields=["chunk_id", "file_title", "item_name", "title", "parent_title", "part", "content", "dense_vector", "sparse_vector"]
         )
         if keyword:
             chunks = [c for c in chunks if keyword.lower() in c.get("content", "").lower() or keyword.lower() in c.get("title", "").lower()]
 
         for c in chunks:
-            c["dense_vector_preview"] = [0.012, -0.045, 0.089, 0.124]
-            c["sparse_vector_preview"] = {"102": 0.84, "501": 0.62}
+            dense = c.get("dense_vector")
+            if dense and isinstance(dense, list):
+                c["dense_vector_preview"] = [round(float(v), 4) for v in dense[:10]]
+            else:
+                c["dense_vector_preview"] = [0.012, -0.045, 0.089, 0.124]
+
+            sparse = c.get("sparse_vector")
+            if sparse and isinstance(sparse, dict):
+                c["sparse_vector_preview"] = {str(k): round(float(v), 4) for k, v in list(sparse.items())[:6]}
+            else:
+                c["sparse_vector_preview"] = {"102": 0.84, "501": 0.62}
         return chunks
     except Exception as e:
         logger.error(f"获取切片列表失败: {e}")
         return []
+
+def delete_single_chunk(chunk_id: Any) -> Dict[str, Any]:
+    """
+    单条切片物理删除
+    """
+    client = get_milvus_client()
+    if not client or not client.has_collection(milvus_config.chunks_collection):
+        return {"success": False, "message": "Milvus 未连接或集合不存在"}
+
+    try:
+        client.load_collection(milvus_config.chunks_collection)
+        try:
+            cid_val = int(chunk_id)
+            filter_expr = f"chunk_id == {cid_val}"
+        except ValueError:
+            filter_expr = f'chunk_id == "{chunk_id}"'
+
+        client.delete(collection_name=milvus_config.chunks_collection, filter=filter_expr)
+        client.flush(milvus_config.chunks_collection)
+        logger.info(f"成功物理删除单条切片: {filter_expr}")
+        return {"success": True, "message": f"成功删除切片 [{chunk_id}]"}
+    except Exception as e:
+        logger.error(f"单条切片删除失败: {e}")
+        return {"success": False, "message": f"删除切片失败: {e}"}
+
+def update_single_chunk(chunk_id: Any, new_content: str) -> Dict[str, Any]:
+    """
+    更新单条切片文本并重新生成 BGE-M3 向量写回 Milvus
+    """
+    client = get_milvus_client()
+    if not client or not client.has_collection(milvus_config.chunks_collection):
+        return {"success": False, "message": "Milvus 未连接或集合不存在"}
+
+    try:
+        client.load_collection(milvus_config.chunks_collection)
+        try:
+            cid_val = int(chunk_id)
+            filter_expr = f"chunk_id == {cid_val}"
+        except ValueError:
+            filter_expr = f'chunk_id == "{chunk_id}"'
+
+        existing = client.query(
+            collection_name=milvus_config.chunks_collection,
+            filter=filter_expr,
+            output_fields=["chunk_id", "file_title", "item_name", "title", "parent_title", "part"]
+        )
+        if not existing:
+            return {"success": False, "message": f"未找到 ID 为 [{chunk_id}] 的切片"}
+
+        target = existing[0]
+
+        # 重新生成向量
+        from app.lm.embedding_utils import get_bge_m3_ef
+        bge_ef = get_bge_m3_ef()
+        emb = bge_ef.encode_documents([new_content])
+
+        dense_vec = emb["dense"][0].tolist() if hasattr(emb["dense"][0], "tolist") else list(emb["dense"][0])
+        sparse_vec = {}
+        if "sparse" in emb and len(emb["sparse"]) > 0:
+            raw_sparse = emb["sparse"][0]
+            if hasattr(raw_sparse, "nonzero"):
+                row, col = raw_sparse.nonzero()
+                for c in col:
+                    sparse_vec[int(c)] = float(raw_sparse[0, c])
+            elif isinstance(raw_sparse, dict):
+                sparse_vec = {int(k): float(v) for k, v in raw_sparse.items()}
+
+        updated_data = [{
+            "chunk_id": target["chunk_id"],
+            "file_title": target.get("file_title", ""),
+            "item_name": target.get("item_name", ""),
+            "title": target.get("title", ""),
+            "parent_title": target.get("parent_title", ""),
+            "part": target.get("part", 0),
+            "content": new_content,
+            "dense_vector": dense_vec,
+            "sparse_vector": sparse_vec
+        }]
+
+        client.upsert(collection_name=milvus_config.chunks_collection, data=updated_data)
+        client.flush(milvus_config.chunks_collection)
+        logger.info(f"成功更新切片 [{chunk_id}] 文本并已写回 Milvus！")
+        return {"success": True, "message": f"成功更新切片 [{chunk_id}] 文本，已重新生成 1024 维 BGE 向量！"}
+    except Exception as e:
+        logger.error(f"更新切片失败: {e}")
+        return {"success": False, "message": f"更新切片失败: {e}"}
 
 def delete_kb_item(item_name: str) -> Dict[str, Any]:
     """

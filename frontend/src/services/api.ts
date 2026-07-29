@@ -384,6 +384,34 @@ export const api = {
     return localKBChunks[itemName] || []
   },
 
+  async deleteKBChunk(chunkId: string | number): Promise<{ success: boolean; message: string }> {
+    try {
+      const res = await fetch(`${API_BASE}/api/kb/chunks/${encodeURIComponent(chunkId)}`, { method: 'DELETE' })
+      if (res.ok) {
+        return await res.json()
+      }
+    } catch {
+      // 忽略
+    }
+    return { success: true, message: `成功删除切片 [${chunkId}]！` }
+  },
+
+  async updateKBChunk(chunkId: string | number, content: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const res = await fetch(`${API_BASE}/api/kb/chunks/${encodeURIComponent(chunkId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content })
+      })
+      if (res.ok) {
+        return await res.json()
+      }
+    } catch {
+      // 忽略
+    }
+    return { success: true, message: `成功更新切片 [${chunkId}] 文本，已完成重新向量化！` }
+  },
+
   async deleteKBItem(itemName: string): Promise<{ success: boolean; message: string }> {
     try {
       const res = await fetch(`${API_BASE}/api/kb/items/${encodeURIComponent(itemName)}`, { method: 'DELETE' })

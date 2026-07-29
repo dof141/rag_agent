@@ -13,7 +13,10 @@ from app.query_process.api.query_server import (
     query, stream, get_task_history, clear_chat_history, confirm,
     QueryRequest, ConfirmRequest, mcp
 )
-from app.clients.kb_admin_service import list_kb_items, get_kb_chunks, delete_kb_item, get_kb_stats
+from app.clients.kb_admin_service import list_kb_items, get_kb_chunks, delete_kb_item, get_kb_stats, delete_single_chunk, update_single_chunk
+
+class UpdateChunkPayload(BaseModel):
+    content: str
 from app.clients.mongo_history_utils_new import get_all_sessions_summary, delete_session, clear_history
 from app.utils.path_util import PROJECT_ROOT
 from app.core.logger import logger
@@ -83,6 +86,14 @@ class RAGServerManager:
         @app.get("/api/kb/chunks", summary="获取指定设备的切片")
         async def get_chunks(item_name: str, keyword: str = ""):
             return {"code": 200, "data": get_kb_chunks(item_name, keyword)}
+
+        @app.delete("/api/kb/chunks/{chunk_id}", summary="单条切片物理删除")
+        async def delete_chunk(chunk_id: str):
+            return delete_single_chunk(chunk_id)
+
+        @app.put("/api/kb/chunks/{chunk_id}", summary="编辑更新单条切片文本并重新向量化")
+        async def update_chunk(chunk_id: str, payload: UpdateChunkPayload):
+            return update_single_chunk(chunk_id, payload.content)
 
         @app.delete("/api/kb/items/{item_name}", summary="物理删除设备与切片")
         async def delete_item(item_name: str):
