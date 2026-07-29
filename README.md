@@ -31,7 +31,7 @@
 graph TD
     User([前端 Vue3/Vite]) -->|HTTP / Stream| API[FastAPI 后端服务]
     
-    subgraph 导入工作流 (Import LangGraph)
+    subgraph ImportFlow ["导入工作流 (Import LangGraph)"]
         API --> NodeEntry[Node 1: 文件校验 & 类型判断]
         NodeEntry --> NodeMinerU[Node 2: MinerU PDF/Docx 解析]
         NodeMinerU --> NodeVLM[Node 3: VLM 视觉多线程处理]
@@ -41,7 +41,7 @@ graph TD
         NodeEntry -.-> SyncMongo[(MongoDB 状态持久化)]
     end
 
-    subgraph 查询工作流 (Query LangGraph)
+    subgraph QueryFlow ["查询工作流 (Query LangGraph)"]
         API --> NodeHyDE[Node Query: HyDE 拓展]
         NodeHyDE --> NodeVectorSearch[向量检索 (Milvus)]
         NodeVectorSearch --> NodeRerank[BGE Reranker 重排]
