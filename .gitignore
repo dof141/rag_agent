@@ -1,0 +1,55 @@
+# Environment variables & secrets
+.env
+.env.local
+.env.*.local
+*.env
+
+# Python & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+
+# Project Logs & Runtime Output
+doc/
+docs/
+log/
+logs/
+*.log
+output/
+temp-files/
+scratch/
+app/eval/reports/
+
+# IDE & OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Frontend (Vue 3 / Node)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.local

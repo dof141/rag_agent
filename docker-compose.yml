@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  # Milvus 向量数据库
+  milvus:
+    image: milvusdb/milvus:v2.4.0
+    container_name: milvus-standalone
+    command: ["milvus", "run", "standalone"]
+    ports:
+      - "19530:19530"
+
+  # Neo4j 图数据库
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: neo4j-container
+    environment:
+      - NEO4J_AUTH=neo4j/your_rotated_neo4j_password_here
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+
+  # MongoDB 数据库
+  mongodb:
+    image: mongo:6.0
+    container_name: mongodb-container
+    ports:
+      - "27017:27017"
+
+  # MinIO 对象存储
+  minio:
+    image: minio/minio
+    container_name: minio-container
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: your_rotated_minio_password_here
+    ports:
+      - "9000:9000"
+      - "9001:9001"

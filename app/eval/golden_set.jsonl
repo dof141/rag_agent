@@ -1,0 +1,5 @@
+{"question": "华为擎云B530的机箱尺寸是多少？", "ground_truth": "高度约293mm，宽度约93mm，深度约315.5mm", "item_names": ["华为擎云B530"]}
+{"question": "华为擎云B530支持哪些视频输出接口？", "ground_truth": "支持HDMI和DP（DisplayPort）接口，具体数量因型号而异", "item_names": ["华为擎云B530"]}
+{"question": "华为擎云B530最高可搭载什么处理器？", "ground_truth": "最高搭载第12代英特尔酷睿i7-12700处理器", "item_names": ["华为擎云B530"]}
+{"question": "华为擎云B530的机箱大约有多大体积？", "ground_truth": "采用约8L小机箱设计，体积约为传统台式机的三分之一", "item_names": ["华为擎云B530"]}
+{"question": "华为擎云B530如何通过电脑管家查看玩机技巧？", "ground_truth": "点击桌面底部任务栏上的华为电脑管家，再进入玩机技巧", "item_names": ["华为擎云B530"]}
