@@ -83,6 +83,7 @@
                   <ChevronRight v-else class="toggle-icon" />
                   <Activity class="timeline-icon" />
                   <span>思考与知识库检索节点 ({{ getCompletedCount(msg.node_steps) }}/{{ msg.node_steps.length }})</span>
+                  <span v-if="msg.total_duration" class="total-duration-tag">⚡ 耗时 {{ msg.total_duration }}s</span>
                 </div>
                 <span class="status-tag">已完成</span>
               </div>
@@ -99,6 +100,7 @@
                   <Loader2 v-else-if="step.status === 'running'" class="step-status-icon spin" />
                   <span v-else class="node-num">•</span>
                   <span>{{ step.name }}</span>
+                  <span v-if="step.duration !== undefined" class="node-duration-tag">{{ step.duration }}s</span>
                 </div>
               </div>
             </div>
@@ -829,6 +831,26 @@ const scrollToBottom = () => {
 
 .step-status-icon { width: 12px; height: 12px; }
 .step-status-icon.spin { animation: spin 1s linear infinite; }
+
+.total-duration-tag {
+  font-size: 0.7rem;
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  margin-left: 6px;
+}
+
+.node-duration-tag {
+  font-size: 0.68rem;
+  opacity: 0.85;
+  font-family: monospace;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 0 4px;
+  border-radius: 4px;
+  margin-left: 2px;
+}
 
 @keyframes spin {
   from { transform: rotate(0deg); }

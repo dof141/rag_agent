@@ -9,7 +9,7 @@ from app.core.logger import logger
 from app.lm.lm_utils import get_llm_client
 from app.query_process.agent.state import QueryGraphState
 from app.utils.sse_utils import push_to_session, SSEEvent
-from app.utils.task_utils import add_running_task, add_done_task, set_task_result
+from app.utils.task_utils import add_running_task, add_done_task, set_task_result, get_node_durations, get_total_duration
 
 MAX_CONTEXT_CHARS = 12000
 
@@ -246,6 +246,7 @@ def step_5_write_history(state: QueryGraphState):
     image_urls = state.get("image_urls", [])
     sources = state.get("sources", [])
     node_steps = state.get("node_steps", STANDARD_COMPLETED_NODES)
+    total_duration = state.get("total_duration", 0.0)
 
     if answer and session_id:
         save_chat_message(
@@ -256,9 +257,10 @@ def step_5_write_history(state: QueryGraphState):
             rewritten_query=rewritten_query,
             image_urls=image_urls,
             sources=sources,
-            node_steps=node_steps  # 存入数据库，保证刷新页面后仍能显示节点执行历史
+            node_steps=node_steps,
+            total_duration=total_duration
         )
-        logger.info("完成了本次对话的 MongoDB 存储 (包含 node_steps 节点历史)！")
+        logger.info(f"完成了本次对话的 MongoDB 存储 (包含 node_steps 节点历史与总耗时 {total_duration}s)！")
 
 
 def node_answer_output(state: QueryGraphState) -> dict:
@@ -305,7 +307,24 @@ def node_answer_output(state: QueryGraphState) -> dict:
             final_answer = text_answer
 
         state["answer"] = final_answer
-        state["node_steps"] = STANDARD_COMPLETED_NODES
+
+        # 标记当前节点完成以准确计算包含当前节点的执行耗时
+        add_done_task(request_id, sys._getframe().f_code.co_name, is_stream)
+
+        # 提取动态节点耗时与总耗时
+        node_durations = get_node_durations(request_id)
+        total_duration = get_total_duration(request_id)
+
+        dynamic_completed_nodes = []
+        for node in STANDARD_COMPLETED_NODES:
+            node_id = node["node_id"]
+            node_copy = dict(node)
+            if node_id in node_durations:
+                node_copy["duration"] = node_durations[node_id]
+            dynamic_completed_nodes.append(node_copy)
+
+        state["node_steps"] = dynamic_completed_nodes
+        state["total_duration"] = total_duration
 
         # 5. 给前端推送 SSE FINAL 信号
         if is_stream:
@@ -317,7 +336,8 @@ def node_answer_output(state: QueryGraphState) -> dict:
                     "status": "completed",
                     "image_urls": real_images or [],
                     "sources": sources or [],
-                    "node_steps": STANDARD_COMPLETED_NODES
+                    "node_steps": dynamic_completed_nodes,
+                    "total_duration": total_duration
                 }
             )
         else:
@@ -326,12 +346,12 @@ def node_answer_output(state: QueryGraphState) -> dict:
     # 6. 保存聊天记录
     step_5_write_history(state)
 
-    add_done_task(request_id, sys._getframe().f_code.co_name, is_stream)
     logger.info("---node_answer_output 节点处理结束---")
 
     return {
         "answer": state.get("answer", ""),
         "image_urls": state.get("image_urls", []),
         "sources": state.get("sources", []),
-        "node_steps": STANDARD_COMPLETED_NODES
+        "node_steps": state.get("node_steps", STANDARD_COMPLETED_NODES),
+        "total_duration": state.get("total_duration", 0.0)
     }

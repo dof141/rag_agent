@@ -88,7 +88,8 @@ def save_chat_message(
         message_id: str = None,
         image_urls: list = None,
         sources: list = None,
-        node_steps: list = None  # 👈 增加节点执行历史轨迹
+        node_steps: list = None,
+        total_duration: float = None
 ) -> str:
     """
     写入/更新单条会话记录到MongoDB
@@ -107,6 +108,7 @@ def save_chat_message(
         "image_urls": image_urls or [],  # 保存图片数组
         "sources": sources or [],  # 保存知识库引用来源数组
         "node_steps": node_steps or [],  # 保存节点执行历史轨迹
+        "total_duration": total_duration,  # 保存总运行时长（秒）
         "ts": ts  # 时间戳，排序和时间筛选维度
     }
 

@@ -8,6 +8,7 @@ export interface ChatMessage {
   timestamp: number
   sources?: ChunkSource[]
   node_steps?: any[]
+  total_duration?: number
   isStepsCollapsed?: boolean
 }
 
