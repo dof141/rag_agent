@@ -29,24 +29,24 @@
 
 ```mermaid
 graph TD
-    User([前端 Vue3/Vite]) -->|HTTP / Stream| API[FastAPI 后端服务]
+    User["前端 Vue3/Vite"] -->|HTTP / Stream| API["FastAPI 后端服务"]
     
     subgraph ImportFlow ["导入工作流 (Import LangGraph)"]
-        API --> NodeEntry[Node 1: 文件校验 & 类型判断]
-        NodeEntry --> NodeMinerU[Node 2: MinerU PDF/Docx 解析]
-        NodeMinerU --> NodeVLM[Node 3: VLM 视觉多线程处理]
-        NodeVLM --> NodeSplit[Node 4: 标题与语义粗切分]
-        NodeSplit --> NodeEmbedding[Node 5: BGE-M3 向量生成]
-        NodeEmbedding --> Milvus[(Milvus 向量库)]
-        NodeEntry -.-> SyncMongo[(MongoDB 状态持久化)]
+        API --> NodeEntry["Node 1: 文件校验 & 类型判断"]
+        NodeEntry --> NodeMinerU["Node 2: MinerU PDF/Docx 解析"]
+        NodeMinerU --> NodeVLM["Node 3: VLM 视觉多线程处理"]
+        NodeVLM --> NodeSplit["Node 4: 标题与语义粗切分"]
+        NodeSplit --> NodeEmbedding["Node 5: BGE-M3 向量生成"]
+        NodeEmbedding --> Milvus["Milvus 向量库"]
+        NodeEntry -.-> SyncMongo["MongoDB 状态持久化"]
     end
 
     subgraph QueryFlow ["查询工作流 (Query LangGraph)"]
-        API --> NodeHyDE[Node Query: HyDE 拓展]
-        NodeHyDE --> NodeVectorSearch[向量检索 (Milvus)]
-        NodeVectorSearch --> NodeRerank[BGE Reranker 重排]
-        NodeRerank --> NodeMCP[MCP 联网补全]
-        NodeMCP --> NodeLLM[LLM 流式输出]
+        API --> NodeHyDE["Node Query: HyDE 拓展"]
+        NodeHyDE --> NodeVectorSearch["向量检索 (Milvus)"]
+        NodeVectorSearch --> NodeRerank["BGE Reranker 重排"]
+        NodeRerank --> NodeMCP["MCP 联网补全"]
+        NodeMCP --> NodeLLM["LLM 流式输出"]
     end
 ```
 
