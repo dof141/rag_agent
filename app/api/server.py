@@ -120,6 +120,7 @@ class RAGServerManager:
 
     def _setup_static_frontend(self):
         """挂载打包后的 Vue 3 统一前端静态产物 (frontend/dist)，支持 SPA 路由兜底"""
+        dist_path = PROJECT_ROOT / "frontend" / "dist"
         if not dist_path.exists():
             logger.info(f"检测到前端打包目录不存在 ({dist_path})，正在自动为您构建 Vue 3 前端产物...")
             try:
