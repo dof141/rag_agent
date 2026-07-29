@@ -22,8 +22,9 @@ def list_kb_items(keyword: str = "") -> List[Dict[str, Any]]:
         client.load_collection(milvus_config.item_name_collection)
         items = client.query(
             collection_name=milvus_config.item_name_collection,
-            filter="",
-            output_fields=["file_title", "item_name"]
+            filter='item_name != ""',
+            output_fields=["file_title", "item_name"],
+            limit=16384
         )
 
         result = []
@@ -40,7 +41,8 @@ def list_kb_items(keyword: str = "") -> List[Dict[str, Any]]:
                 chunks_res = client.query(
                     collection_name=milvus_config.chunks_collection,
                     filter=f'item_name == "{item_name}"',
-                    output_fields=["chunk_id"]
+                    output_fields=["chunk_id"],
+                    limit=16384
                 )
                 chunk_count = len(chunks_res)
 
@@ -71,7 +73,8 @@ def get_kb_chunks(item_name: str, keyword: str = "") -> List[Dict[str, Any]]:
         chunks = client.query(
             collection_name=milvus_config.chunks_collection,
             filter=f'item_name == "{item_name}"',
-            output_fields=["chunk_id", "file_title", "item_name", "title", "parent_title", "part", "content", "dense_vector", "sparse_vector"]
+            output_fields=["chunk_id", "file_title", "item_name", "title", "parent_title", "part", "content", "dense_vector", "sparse_vector"],
+            limit=16384
         )
         if keyword:
             chunks = [c for c in chunks if keyword.lower() in c.get("content", "").lower() or keyword.lower() in c.get("title", "").lower()]
