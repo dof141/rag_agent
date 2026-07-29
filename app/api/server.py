@@ -120,7 +120,16 @@ class RAGServerManager:
 
     def _setup_static_frontend(self):
         """挂载打包后的 Vue 3 统一前端静态产物 (frontend/dist)，支持 SPA 路由兜底"""
-        dist_path = PROJECT_ROOT / "frontend" / "dist"
+        if not dist_path.exists():
+            logger.info(f"检测到前端打包目录不存在 ({dist_path})，正在自动为您构建 Vue 3 前端产物...")
+            try:
+                import subprocess
+                frontend_dir = PROJECT_ROOT / "frontend"
+                subprocess.run("npm run build", cwd=str(frontend_dir), shell=True, check=True)
+                logger.info("🎉 自动构建 Vue 3 前端成功！")
+            except Exception as e:
+                logger.error(f"自动构建前端失败: {e}，请手动进入 frontend 目录运行 npm run build")
+
         if dist_path.exists():
             logger.info(f"成功托管 Vue 3 统一前端，路径为：{dist_path}")
             assets_path = dist_path / "assets"
@@ -143,8 +152,6 @@ class RAGServerManager:
                 if index_file.exists():
                     return FileResponse(index_file)
                 raise HTTPException(status_code=404, detail="Frontend index.html not found")
-        else:
-            logger.warning(f"前端构建产物未找到 ({dist_path})，请先在 frontend 目录执行 npm run build")
 
     def run(self):
         """启动统一的高性能 Uvicorn 服务"""
