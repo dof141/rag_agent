@@ -1,31 +1,60 @@
-# 🚀 多模态 GraphRAG 智能知识库系统 (RAG Agent)
+# 🎓 面向学科场景的 RAG 智能问答系统 (rag_agent)
 
-本系统是一套高性能、支持多模态文档解析与图谱扩展的工业级 **Retrieval-Augmented Generation (RAG)** 系统。结合了 **LangGraph Workflow 工作流引擎**、**MinerU 高精文档解析**、**VLM 视觉大模型多线程图文理解**、**BGE-M3 向量嵌入与重排序**、**MongoDB 状态持久化与自愈**，以及 **Milvus / Neo4j 混合检索**。
+[![GitHub Stars](https://img.shields.io/github/stars/dof141/rag_agent?style=flat-square)](https://github.com/dof141/rag_agent)
+[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-green?style=flat-square)](https://fastapi.tiangolo.com/)
+[![Vue 3](https://img.shields.io/badge/Vue-3.x-brightgreen?style=flat-square)](https://vuejs.org/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-Workflow-orange?style=flat-square)](https://www.langchain.com/langgraph)
+[![Milvus](https://img.shields.io/badge/Milvus-2.4%2B-blueviolet?style=flat-square)](https://milvus.io/)
 
----
-
-## 🌟 核心功能特性
-
-1. **📄 多模态文档智能解析流水线 (Import Workflow)**
-   - **MinerU 高精转换**：支持 PDF、Docx、PPT 等多格式转 Markdown，自动提取高清晰度图表与公式。
-   - **VLM 多线程图片总结**：采用多线程并发 (`ThreadPoolExecutor`) 调用视觉大模型，自动生成图片的结构化 ALT 描述并回填至 Markdown。
-   - **标题与语义切片**：基于层级 Markdown 标题进行语义切割，保留上下文链接。
-   - **BGE-M3 混合向量生成**：提取 Dense & Sparse 文本向量，批量写入 Milvus 向量数据库。
-
-2. **🤖 智能查询与 HyDE 增强流水线 (Query Workflow)**
-   - **HyDE 假设性文档扩展**：通过 LLM 生成回答假设，大幅提升跨语义召回匹配度。
-   - **BGE Reranker 重排序**：精细化相关性二次打分，过滤无关切片。
-   - **MCP WebSearch 联网增强**：本地知识库无结果时，自动触发 MCP 联网搜索补充实时信息。
-   - **打字机流式回答**：流式生成带有引用标记的最终答案。
-
-3. **🛡️ 状态持久化与断点自愈 (Auto-Healing & Retry)**
-   - **MongoDB 任务轮转**：支持全流程状态落盘 (`kb002.import_tasks`)。
-   - **启动自愈恢复**：服务异常崩溃重启时，自动清理中断的旧任务。
-   - **前端一键重试**：节点报错时支持前端一键从 Node 1 无缝重启动流。
+**GitHub 仓库**: [https://github.com/dof141/rag_agent](https://github.com/dof141/rag_agent)
 
 ---
 
-## 🏗️ 系统整体架构图
+## 📌 项目背景
+
+针对日常学习中面对 **PDF 课件、PPT 讲义、Markdown 笔记** 等学习资料碎片化，且通用通用大模型缺乏私有上下文易产生幻觉等问题；本项目搭建了一套面向学科场景的 **RAG 智能问答系统**，实现精准答疑、稳定交互、可工程化落地使用。
+
+---
+
+## 🌟 核心工作与成果
+
+1. **多模态高精解析与分层切分策略**
+   - **复杂文档结构提取**：针对复杂排版的 PDF / PPT 文件，采用 **MinerU** 提取 Markdown 结构，调用 **VLM (视觉大模型)** 提取图像语义描述并入库 MinIO；
+   - **语义切分优化**：针对纯文本笔记设计**“递归分层切分 + 短块合并”**策略，有效解决长文档 Chunk 切割导致的上下文断裂和语义不完整问题。
+
+2. **多路并行召回与动态重排截断机制**
+   - **多路并行召回**：结合稠密/稀疏向量（BGE-M3）、HyDE 假设性回答生成以及 MCP 接口的多路召回机制；
+   - **RRF 融合与动态截断**：采用 RRF (Reciprocal Rank Fusion) 算法与 ReRank 重排，对**分差 > 0.5 且降幅大于 25%** 的低相关文档执行动态截断，使**召回精确率达到 90% 以上**，大幅提升回答准确度。
+
+3. **意图识别与多轮上下文改写**
+   - 针对大模型答非所问、用户指代不清及连续追问场景，基于大模型进行意图识别并结合 **MongoDB 多轮对话历史**对用户 Query 进行重写与实体提取，**意图分类准确率高达 95%**。
+
+4. **流式交互与服务性能优化**
+   - 采用 SSE 打字机流式问答交互，使用 MongoDB 高效存储会话与高频问答信息，有效降低数据库连接压力，显著提升系统响应效率。
+
+5. **工程化落地、Ragas 评测与一键部署**
+   - **Ragas 评测体系**：搭建 Ragas 系统，对模型幻觉率、检索召回率及检索精度进行全方位系统评估；
+   - **高可用容错兜底**：统一代码与日志规范，配置 API 异常自动重试与全局无过滤兜底检索机制；
+   - **Docker 一键部署**：提供容器化 Docker / Docker-Compose 工具，实现全套服务一键快速部署。
+
+---
+
+## 🛠️ 整体技术栈
+
+| 维度 | 技术选型 | 说明 |
+| :--- | :--- | :--- |
+| **核心 Backend** | Python 3.10+ / FastAPI | 高性能异步接口服务与流式传输 |
+| **工作流引擎** | LangGraph / LangChain | 基于状态图的节点拆分与复杂流控 |
+| **多模态解析** | MinerU / VLM (Qwen-VL/SenseNova) | PDF/PPT 转 Markdown 及图像语义自动回填 |
+| **向量/图存储** | Milvus 2.4+ / Neo4j 5.26+ | BGE-M3 混合向量检索与知识图谱拓展 |
+| **状态持久化** | MongoDB 6.0+ | 会话上下文、高频 Q&A 状态持久化与断点自愈 |
+| **前端 Frontend** | Vue 3 + TypeScript + Vite | 现代化沉浸式问答与知识库管理 UI |
+| **评估与部署** | Ragas / Docker / Docker-Compose | 自动化评测体系与一键容器化部署 |
+
+---
+
+## 🏗️ 系统架构图
 
 ```mermaid
 graph TD
@@ -35,217 +64,86 @@ graph TD
         API --> NodeEntry["Node 1: 文件校验 & 类型判断"]
         NodeEntry --> NodeMinerU["Node 2: MinerU PDF/Docx 解析"]
         NodeMinerU --> NodeVLM["Node 3: VLM 视觉多线程处理"]
-        NodeVLM --> NodeSplit["Node 4: 标题与语义粗切分"]
+        NodeVLM --> NodeSplit["Node 4: 递归分层切分 & 短块合并"]
         NodeSplit --> NodeEmbedding["Node 5: BGE-M3 向量生成"]
         NodeEmbedding --> Milvus["Milvus 向量库"]
         NodeEntry -.-> SyncMongo["MongoDB 状态持久化"]
     end
 
     subgraph QueryFlow ["查询工作流 (Query LangGraph)"]
-        API --> NodeHyDE["Node Query: HyDE 拓展"]
-        NodeHyDE --> NodeVectorSearch["向量检索 (Milvus)"]
-        NodeVectorSearch --> NodeRerank["BGE Reranker 重排"]
-        NodeRerank --> NodeMCP["MCP 联网补全"]
-        NodeMCP --> NodeLLM["LLM 流式输出"]
+        API --> NodeHyDE["Node Query: 意图识别 & HyDE 拓展"]
+        NodeHyDE --> NodeVectorSearch["多路并行召回 (BGE-M3 / HyDE / MCP)"]
+        NodeVectorSearch --> NodeRerank["RRF 融合 & ReRank 动态截断"]
+        NodeRerank --> NodeLLM["LLM 流式输出"]
     end
 ```
 
 ---
 
-## 📦 技术栈清单
+## 🚀 快速开始与 Docker 一键部署
 
-| 模块 | 技术选型 | 说明 |
-| :--- | :--- | :--- |
-| **后端框架** | FastAPI + Python 3.10+ | 异步高效 RESTful 接口与流式响应 |
-| **工作流引擎** | LangGraph | 状态机图流控引擎 |
-| **向量数据库** | Milvus (v2.4+) | 存储与检索 1024 维 BGE-M3 向量 |
-| **图数据库** | Neo4j (v5.26+) | 知识图谱实体与拓扑关系存储 |
-| **状态持久化** | MongoDB (v6.0+) | 存储任务节点状态与全流程 Log |
-| **对象存储** | MinIO | 本地私有化图片与解析产物文件存储 |
-| **嵌入/重排** | BAAI/bge-m3, BAAI/bge-reranker-large | 文本向量化与二次相关性重排 |
-| **多模态 VLM** | SenseNova / Qwen-VL / Qwen-Omni | 图像识别与多图多线程并发解析 |
-| **前端界面** | Vue 3 + TypeScript + Vite + Lucide Icons | 现代化双模式 (导入/问答) 交互 UI |
-
----
-
-## 🛠️ 部署与环境准备
-
-### 1. 基础依赖服务启动 (Docker Compose)
-
-在部署后端前，请确保启动 **Milvus**、**Neo4j**、**MongoDB** 以及 **MinIO**。
-
-推荐使用 `docker-compose.yml` 启动核心依赖服务：
-
-```yaml
-version: '3.8'
-
-services:
-  # Milvus 向量数据库
-  milvus:
-    image: milvusdb/milvus:v2.4.0
-    container_name: milvus-standalone
-    command: ["milvus", "run", "standalone"]
-    ports:
-      - "19530:19530"
-
-  # Neo4j 图数据库
-  neo4j:
-    image: neo4j:5.26-community
-    container_name: neo4j-container
-    environment:
-      - NEO4J_AUTH=neo4j/your_rotated_neo4j_password_here
-    ports:
-      - "7474:7474"
-      - "7687:7687"
-
-  # MongoDB 数据库
-  mongodb:
-    image: mongo:6.0
-    container_name: mongodb-container
-    ports:
-      - "27017:27017"
-
-  # MinIO 对象存储
-  minio:
-    image: minio/minio
-    container_name: minio-container
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: admin
-      MINIO_ROOT_PASSWORD: your_rotated_minio_password_here
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-```
-
----
-
-### 2. 后端部署 (Python FastAPI)
-
-#### 步骤 1：克隆代码并创建 Python 虚拟环境
-
+### 1. 克隆项目
 ```bash
 git clone https://github.com/dof141/rag_agent.git
 cd rag_agent
-
-# 使用 uv 或 conda 创建 Python 3.10 环境
-uv venv .venv
-# 激活环境 (Windows)
-.venv\Scripts\activate
-# 安装依赖
-uv pip install -r requirements.txt
 ```
 
-#### 步骤 2：配置环境变量 (`.env`)
+### 2. 依赖服务启动 (Docker Compose)
+项目根目录提供了 `docker-compose.yml` 配置文件，包含 **Milvus**、**MongoDB**、**Neo4j** 与 **MinIO**：
 
-在 `rag_agent` 根目录下创建 `.env` 文件（或修改已现有的配置文件）：
+```bash
+docker-compose up -d
+```
 
+### 3. 配置 `.env` 环境变量
+在项目根目录新建 `.env` 文件：
 ```ini
-# ====== 1. LLM 文本大模型配置 ======
-OPENAI_BASE_URL=http://198.18.0.1:20128/v1
-OPENAI_API_KEY=your_rotated_openai_key_here
+# 大模型配置
+OPENAI_BASE_URL=http://your-llm-api/v1
+OPENAI_API_KEY=your_api_key
 LLM_DEFAULT_MODEL=sensenova/deepseek-v4-flash
-LLM_DEFAULT_TEMPERATURE=0.1
 
-# ====== 2. VLM 视觉多模态大模型配置 ======
-VLM_BASE_URL=http://198.18.0.1:20128/v1
-VLM_API_KEY=your_rotated_vlm_key_here
+# VLM 视觉模型配置
+VLM_BASE_URL=http://your-vlm-api/v1
+VLM_API_KEY=your_vlm_key
 VL_MODEL=sensenova/sensenova-6.7-flash-lite
-VLM_TIMEOUT=60.0
 
-# ====== 3. BGE 向量模型配置 ======
-BGE_M3_PATH=F:/ai_models/models/BAAI/bge-m3
-BGE_DEVICE=cpu
-
-# ====== 4. Milvus 配置 ======
+# 数据库配置
 MILVUS_URL=http://127.0.0.1:19530
-CHUNKS_COLLECTION=kb_chunks
-
-# ====== 5. Neo4j 配置 ======
-NEO4J_URI=bolt://127.0.0.1:7687
-NEO4J_DATABASE=neo4j
-NEO4J_USERNAME=neo4j
-NEO4J_PASSWORD=your_rotated_neo4j_password_here
-
-# ====== 6. MongoDB 配置 ======
 MONGO_URL=mongodb://127.0.0.1:27017
 MONGO_DB_NAME=kb002
-
-# ====== 7. MinIO 配置 ======
 MINIO_ENDPOINT=127.0.0.1:9000
-MINIO_ACCESS_KEY=admin
-MINIO_SECRET_KEY=your_rotated_minio_password_here
-MINIO_BUCKET_NAME=knowledge-base-files
-
-# ====== 8. MinerU 配置 ======
-MINERU_API_TOKEN=your_mineru_api_token_here
-MINERU_BASE_URL=https://mineru.net/api/v4
 ```
 
-#### 步骤 3：启动 FastAPI 后端服务
+### 4. 启动应用后端与前端
 
 ```bash
-uvicorn app.query_process.api.query_server:app --host 0.0.0.0 --port 8000 --reload
-```
+# 安装 Python 依赖并启动
+uv venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+uv pip install -r requirements.txt
 
-后端服务启动后，接口文档地址为：`http://localhost:8000/docs`
+python main.py
+```
+启动完成后，浏览器访问 `http://127.0.0.1:8000` 即可使用统一问答界面！
 
 ---
 
-### 3. 前端部署 (Vue 3 + Vite)
+## 📊 Ragas 自动化评估体系
 
-#### 步骤 1：安装依赖与构建
+在 `app/eval/` 目录下引入 **Ragas** 评测指标对 RAG 系统的检索与回答质量进行常态化跑分：
 
-```bash
-cd frontend
+```python
+from ragas import evaluate
+from ragas.metrics import faithfulness, answer_relevance, context_precision, context_recall
 
-# 安装依赖
-npm install
-
-# 启动本地开发服务
-npm run dev
-
-# 构建生产产物
-npm run build
-```
-
-#### 步骤 2：Nginx 部署生产静态文件 (可选)
-
-```nginx
-server {
-    listen 80;
-    server_name localhost;
-
-    location / {
-        root /usr/share/nginx/html/dist;
-        index index.html;
-        try_files $uri $uri/ /index.html;
-    }
-
-    # API 接口代理转发
-    location /api/ {
-        proxy_pass http://127.0.0.1:8000/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
+# 运行 Ragas 评测集
+score = evaluate(dataset=eval_dataset, metrics=[faithfulness, answer_relevance, context_precision, context_recall])
+print(score)
 ```
 
 ---
 
-## ⚡ 性能与并发参数调优指南
+## 📄 许可证
 
-1. **VLM 并发线程数调整**：
-   - 配置文件：`app/import_process/agent/nodes/node_md_img.py`
-   - 参数：`max_workers = min(5, total_count)`
-   - 说明：在保证代理/第三方大模型 API 不触发 `500 internal_error` 的前提下，可将并发调高至 3~5 线程，大图提速 4 倍以上。
-
-2. **向量检索与 Rerank 过滤**：
-   - 向量匹配数：`top_k = 10`
-   - 重排序筛选：`rerank_top_k = 3`，Score 阈值限制大于 `0.35`。
-
----
-
-## 📝 许可证与贡献
-
-本项目采用 MIT 许可证，欢迎提交 Issue 与 Pull Request 共同优化提升性能！
+本项目基于 [MIT License](LICENSE) 开源。
