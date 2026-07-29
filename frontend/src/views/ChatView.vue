@@ -433,7 +433,7 @@ const sendUserMessage = async () => {
 
   if (isStream) {
     // ----------------------------------------------------
-    // ⚡ 流式打字机模式：创建占位消息，建立 SSE 实时监听
+    // ⚡ 流式打字机模式：创建占位消息，建立 W3C SSE 实时监听
     // ----------------------------------------------------
     const assistMsgId = `m-ast-${Date.now()}`
     const assistantMsgIndex = messages.value.length
@@ -450,11 +450,30 @@ const sendUserMessage = async () => {
     const sseUrl = `${location.protocol}//${location.host}/stream/${res.request_id}`
     const es = new EventSource(sseUrl)
 
-    es.onmessage = (event) => {
+    const handleSSEPayload = (eventData: string, eventType: string) => {
       try {
-        const payload = JSON.parse(event.data)
+        const payload = JSON.parse(eventData)
 
-        if (payload.status === 'completed' || payload.event === 'final') {
+        // 1. 确认框事件 / 暂停信号
+        if (eventType === 'confirmation_required' || payload.event === 'confirmation_required' || payload.awaiting_confirmation) {
+          isThinking.value = false
+          activeNodeSteps.value[0].status = 'paused'
+          activeCandidates.value = (payload.candidates || payload.candidate_items || []).map((c: any) => {
+            if (typeof c === 'string') return { id: c, item_name: c, file_title: `${c} 设备手册` }
+            return { id: c.id || c.item_name, item_name: c.item_name || c.id, file_title: c.file_title || `${c.item_name} 手册`, score: c.score }
+          })
+          pendingRequestQuery.value = query
+          showCandidateSelector.value = true
+          es.close()
+          
+          if (messages.value[assistantMsgIndex] && !messages.value[assistantMsgIndex].text) {
+            messages.value.splice(assistantMsgIndex, 1)
+          }
+          return
+        }
+
+        // 2. 最终完成信号
+        if (eventType === 'final' || payload.status === 'completed' || payload.event === 'final') {
           if (payload.answer) messages.value[assistantMsgIndex].text = payload.answer
           if (payload.sources) messages.value[assistantMsgIndex].sources = payload.sources
           if (payload.image_urls) messages.value[assistantMsgIndex].image_urls = payload.image_urls
@@ -469,12 +488,16 @@ const sendUserMessage = async () => {
           return
         }
 
-        if (payload.delta) {
-          messages.value[assistantMsgIndex].text += payload.delta
-          scrollToBottom()
+        // 3. 字符流输出
+        if (eventType === 'delta' || payload.delta) {
+          if (payload.delta) {
+            messages.value[assistantMsgIndex].text += payload.delta
+            scrollToBottom()
+          }
         }
 
-        if (payload.done_list || payload.running_list) {
+        // 4. 节点运行进度
+        if (eventType === 'progress' || payload.done_list || payload.running_list) {
           const doneList = payload.done_list || []
           const runningList = payload.running_list || []
           const nodeDurations = payload.node_durations || {}
@@ -486,12 +509,20 @@ const sendUserMessage = async () => {
             else if (isRunning) node.status = 'running'
             if (nodeDurations[node.node_id] !== undefined) node.duration = nodeDurations[node.node_id]
           })
-          messages.value[assistantMsgIndex].node_steps = JSON.parse(JSON.stringify(activeNodeSteps.value))
+          if (messages.value[assistantMsgIndex]) {
+            messages.value[assistantMsgIndex].node_steps = JSON.parse(JSON.stringify(activeNodeSteps.value))
+          }
         }
       } catch (e) {
         console.error('SSE 数据解析错误', e)
       }
     }
+
+    es.addEventListener('delta', (e: any) => handleSSEPayload(e.data, 'delta'))
+    es.addEventListener('progress', (e: any) => handleSSEPayload(e.data, 'progress'))
+    es.addEventListener('final', (e: any) => handleSSEPayload(e.data, 'final'))
+    es.addEventListener('confirmation_required', (e: any) => handleSSEPayload(e.data, 'confirmation_required'))
+    es.onmessage = (e: any) => handleSSEPayload(e.data, 'message')
 
     es.onerror = () => {
       es.close()
@@ -522,7 +553,6 @@ const sendUserMessage = async () => {
 
     isThinking.value = false
 
-    // 从后端同步最新的完整会话记录（重试等待 MongoDB 异步落盘完成）
     let sessionDetail = await api.getSessionDetail(sid)
     let lastMsg = sessionDetail?.messages?.length ? sessionDetail.messages[sessionDetail.messages.length - 1] : null
 
@@ -578,40 +608,118 @@ const onCandidateConfirmed = async (candidateName: string) => {
     console.warn('调用 confirm 接口异常，使用回退模型', e)
   }
 
-  let isDone = false
-  let pollAttempts = 0
-  while (!isDone && pollAttempts < 300) {
-    await new Promise(r => setTimeout(r, 500))
-    pollAttempts++
-    await pollTaskNodeStatus(newReqId)
-    if (activeNodeSteps.value.every(n => n.status === 'completed')) {
-      isDone = true
+  if (isStreamMode.value) {
+    const assistMsgId = `m-ast-${Date.now()}`
+    const assistantMsgIndex = messages.value.length
+    messages.value.push({
+      id: assistMsgId,
+      role: 'assistant',
+      text: '',
+      timestamp: Date.now() / 1000,
+      node_steps: JSON.parse(JSON.stringify(activeNodeSteps.value)),
+      isStreaming: true
+    })
+    scrollToBottom()
+
+    const sseUrl = `${location.protocol}//${location.host}/stream/${newReqId}`
+    const es = new EventSource(sseUrl)
+
+    const handleSSEPayload = (eventData: string, eventType: string) => {
+      try {
+        const payload = JSON.parse(eventData)
+
+        if (eventType === 'final' || payload.status === 'completed' || payload.event === 'final') {
+          if (payload.answer) messages.value[assistantMsgIndex].text = payload.answer
+          if (payload.sources) messages.value[assistantMsgIndex].sources = payload.sources
+          if (payload.image_urls) messages.value[assistantMsgIndex].image_urls = payload.image_urls
+          if (payload.total_duration) messages.value[assistantMsgIndex].total_duration = payload.total_duration
+          if (payload.node_steps) messages.value[assistantMsgIndex].node_steps = payload.node_steps
+          
+          messages.value[assistantMsgIndex].isStreaming = false
+          isThinking.value = false
+          es.close()
+          scrollToBottom()
+          loadSessions()
+          return
+        }
+
+        if (eventType === 'delta' || payload.delta) {
+          if (payload.delta) {
+            messages.value[assistantMsgIndex].text += payload.delta
+            scrollToBottom()
+          }
+        }
+
+        if (eventType === 'progress' || payload.done_list || payload.running_list) {
+          const doneList = payload.done_list || []
+          const runningList = payload.running_list || []
+          const nodeDurations = payload.node_durations || {}
+
+          activeNodeSteps.value.forEach(node => {
+            const isDone = doneList.some((d: string) => d === node.name || d === node.node_id)
+            const isRunning = runningList.some((r: string) => r === node.name || r === node.node_id)
+            if (isDone) node.status = 'completed'
+            else if (isRunning) node.status = 'running'
+            if (nodeDurations[node.node_id] !== undefined) node.duration = nodeDurations[node.node_id]
+          })
+          if (messages.value[assistantMsgIndex]) {
+            messages.value[assistantMsgIndex].node_steps = JSON.parse(JSON.stringify(activeNodeSteps.value))
+          }
+        }
+      } catch (e) {
+        console.error('SSE 数据解析错误', e)
+      }
     }
-  }
 
-  isThinking.value = false
-  
-  // 从后端同步最新的完整会话记录（重试等待 MongoDB 异步落盘完成）
-  let sessionDetail = await api.getSessionDetail(currentSessionId.value)
-  let lastMsg = sessionDetail?.messages?.length ? sessionDetail.messages[sessionDetail.messages.length - 1] : null
+    es.addEventListener('delta', (e: any) => handleSSEPayload(e.data, 'delta'))
+    es.addEventListener('progress', (e: any) => handleSSEPayload(e.data, 'progress'))
+    es.addEventListener('final', (e: any) => handleSSEPayload(e.data, 'final'))
+    es.onmessage = (e: any) => handleSSEPayload(e.data, 'message')
 
-  let retries = 0
-  while ((!lastMsg || lastMsg.role !== 'assistant') && retries < 20) {
-    await new Promise(r => setTimeout(r, 400))
-    retries++
-    sessionDetail = await api.getSessionDetail(currentSessionId.value)
-    lastMsg = sessionDetail?.messages?.length ? sessionDetail.messages[sessionDetail.messages.length - 1] : null
-  }
-
-  if (sessionDetail && sessionDetail.messages && sessionDetail.messages.length > 0) {
-    const lastMessage = sessionDetail.messages[sessionDetail.messages.length - 1]
-    if (lastMessage.role === 'assistant') {
-      messages.value = sessionDetail.messages
-      messages.value[messages.value.length - 1].node_steps = JSON.parse(JSON.stringify(activeNodeSteps.value))
+    es.onerror = () => {
+      es.close()
+      isThinking.value = false
+      if (messages.value[assistantMsgIndex]) {
+        messages.value[assistantMsgIndex].isStreaming = false
+      }
     }
+  } else {
+    let isDone = false
+    let pollAttempts = 0
+    while (!isDone && pollAttempts < 300) {
+      await new Promise(r => setTimeout(r, 500))
+      pollAttempts++
+      await pollTaskNodeStatus(newReqId)
+      if (activeNodeSteps.value.every(n => n.status === 'completed')) {
+        isDone = true
+      }
+    }
+
+    isThinking.value = false
+
+    let sessionDetail = await api.getSessionDetail(currentSessionId.value)
+    let lastMsg = sessionDetail?.messages?.length ? sessionDetail.messages[sessionDetail.messages.length - 1] : null
+
+    let retries = 0
+    while ((!lastMsg || lastMsg.role !== 'assistant') && retries < 20) {
+      await new Promise(r => setTimeout(r, 400))
+      retries++
+      sessionDetail = await api.getSessionDetail(currentSessionId.value)
+      lastMsg = sessionDetail?.messages?.length ? sessionDetail.messages[sessionDetail.messages.length - 1] : null
+    }
+
+    if (sessionDetail && sessionDetail.messages && sessionDetail.messages.length > 0) {
+      const lastMessage = sessionDetail.messages[sessionDetail.messages.length - 1]
+      if (lastMessage.role === 'assistant') {
+        messages.value = sessionDetail.messages
+        if (!lastMessage.node_steps || !lastMessage.node_steps.length || !lastMessage.node_steps.some((s: any) => s.duration !== undefined)) {
+          messages.value[messages.value.length - 1].node_steps = JSON.parse(JSON.stringify(activeNodeSteps.value))
+        }
+      }
+    }
+    scrollToBottom()
+    await loadSessions()
   }
-  scrollToBottom()
-  await loadSessions()
 }
 
 const scrollToBottom = () => {

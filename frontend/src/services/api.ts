@@ -275,7 +275,6 @@ export const api = {
         }
 
         const answerText = data.answer || '问答生成完毕。'
-        this._saveToLocalSession(sid, query, answerText, ['RAG 设备问答'])
 
         return {
           session_id: data.session_id || sid,
