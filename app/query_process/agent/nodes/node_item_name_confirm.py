@@ -10,14 +10,12 @@ from langchain_core.output_parsers import JsonOutputParser, PydanticOutputParser
 
 from pydantic import BaseModel, Field
 
-from app.conf.milvus_config import milvus_config
 from app.core.load_prompt import load_prompt
 from app.query_process.agent.state import QueryGraphState
 from app.utils.task_utils import add_running_task, add_done_task
 from app.clients.mongo_history_utils import get_recent_messages, save_chat_message, update_message_item_names
 from app.lm.lm_utils import get_llm_client
-from app.lm.embedding_utils import generate_embeddings
-from app.clients.milvus_utils import get_milvus_client, create_hybrid_search_requests, hybrid_search
+from app.retrieval import get_retrieval
 from dotenv import load_dotenv,find_dotenv
 from app.core.logger import logger
 
@@ -63,54 +61,7 @@ def step_4_vectorize_and_query(item_names:List[str]) ->List[Dict]:
     :param item_names:
     :return:
     """
-    #1.对大模型的item 进行向量化
-    """
-     result = {
-            "dense": [emb.tolist() for emb in embeddings["dense"]],  # 嵌套列表，与输入文本一一对应
-            "sparse": processed_sparse  # 字典列表，模型已做L2归一化
-        }
-    """
-    result=generate_embeddings(item_names)
-    #2.拿向量化后的数据到milvus 数据库中进行混合检索
-        #拿到数据库连接
-    milvus = get_milvus_client()
-    if not milvus:
-        logger.error("Step 4: 无法连接到 Milvus")
-        return milvus
-    #遍历
-    final_result =[]
-    for index,item_name in enumerate(item_names):
-        dense = result["dense"][index]
-        sparse = result["sparse"][index]
-        #混合检索
-        #构建 request
-        reqs = create_hybrid_search_requests(dense,sparse)
-        #定义权重重排
-        response = hybrid_search(
-            client=milvus,
-            collection_name=milvus_config.item_name_collection,
-            reqs=reqs,
-            ranker_weights=(0.8,0.2),
-            norm_score=True #是否返回分数
-        )
-        logger.info(f"response:{response}")
-        #定义返的 结果体
-        matches = []
-        if response and len(response)>0:
-            for hit in response[0]:
-                entity = hit["entity"]
-                hit_name = entity["item_name"]
-                score = hit["distance"]
-                if hit_name:
-                    matches.append({
-                        "item_name": hit_name,
-                        "score":score
-                    })
-        #3.拿到混合检索后的数据 与分数拼接返回
-        final_result.append({
-            "extracted":item_name,
-            "matches":matches
-        })
+    final_result = get_retrieval().match_item_names(item_names)
     logger.info(f"向量混合检索完成，最终返回数据与得分：{final_result}")
     return final_result
 

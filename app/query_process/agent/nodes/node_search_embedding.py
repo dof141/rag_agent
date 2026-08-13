@@ -1,9 +1,7 @@
 import time
 import sys
 
-from app.clients.milvus_utils import create_hybrid_search_requests, hybrid_search, get_milvus_client
-from app.conf.milvus_config import milvus_config
-from app.lm.embedding_utils import generate_embeddings
+from app.retrieval import get_retrieval
 from app.utils.task_utils import add_done_task, add_running_task
 from app.core.logger import logger
 
@@ -21,38 +19,11 @@ def node_search_embedding(state):
     rewritten_query = state["rewritten_query"]
     # 获取item
     item_names = state["item_names"]
-    # 向量化
-    query_dict = generate_embeddings([rewritten_query])
-
-    quoted = ", ".join(f'"{v}"' for v in item_names) if item_names else ""
-    # 构造最终过滤表达式（如果 item_names 为空，则全局无过滤检索）
-    expr = f"item_name in [{quoted}]" if item_names else None
-    # 设置request
-    reqs = create_hybrid_search_requests(
-        dense_vector=query_dict['dense'][0],
-        sparse_vector=query_dict['sparse'][0],
-        limit=10,
-        expr=expr
+    embedding_chunks = get_retrieval().search_chunks(
+        query=rewritten_query,
+        item_names=item_names,
+        top_k=5,
     )
-    # 搜索client
-    milvus_client = get_milvus_client()
-    if not milvus_client:
-        logger.error("无法连接到 Milvus")
-        return milvus_client
-
-    # 定义权重重排
-    response = hybrid_search(
-        client=milvus_client,
-        collection_name=milvus_config.chunks_collection,
-        reqs=reqs,
-        ranker_weights=(0.9, 0.1),
-        limit=5,  # 最终返回的TOP5相似度最高结果
-        norm_score=True,  # 是否返回分数
-        output_fields=["chunk_id", "content", "item_name","file_title","parent_title"]  # 指定返回的业务字段
-    )
-
-    # 拿到返回结果，并且返回chunks
-    embedding_chunks = response[0] if response else []
     # ...
     add_done_task(state["request_id"], sys._getframe().f_code.co_name, state.get("is_stream"))
 

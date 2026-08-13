@@ -16,7 +16,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
 import sys
 
-from app.lm.reranker_utils import get_reranker_model
+from app.retrieval import get_retrieval
 from app.query_process.agent.state import QueryGraphState
 from app.utils.task_utils import add_running_task, add_done_task
 from app.core.logger import logger
@@ -109,37 +109,12 @@ def step_2_rerank_doc_list(doc_list: list[dict], state: QueryGraphState) -> list
         logger.warning("Rerank 接收到的查询 Query 为空！")
         return doc_list
 
-    rerank_model = get_reranker_model()
-
-    # 构造标准模型输入 pair: [query, doc_text]
-    pairs = [[query, doc['text']] for doc in doc_list]
-
-    # 分批计算得分，防止大规模矩阵吞吐导致崩溃
-    all_scores = []
     try:
-        for i in range(0, len(pairs), RERANK_BATCH_SIZE):
-            batch_pairs = pairs[i: i + RERANK_BATCH_SIZE]
-            batch_scores = rerank_model.compute_score(batch_pairs, normalize=True)
-
-            # 兼容模型返回单个 float 与列表的情况
-            if isinstance(batch_scores, float):
-                batch_scores = [batch_scores]
-            all_scores.extend(batch_scores)
-
+        doc_list_with_score = get_retrieval().rerank_documents(query, doc_list)
     except Exception as e:
-        logger.error(f"Rerank 模型推理计算失败: {e}")
-        # 推理失败时降级返回原列表
+        logger.error(f"Rerank failed: {e}")
         return doc_list
 
-    # 将分数回填到文档字典中
-    doc_list_with_score = []
-    for score, item in zip(all_scores, doc_list):
-        item_copy = dict(item)
-        item_copy['score'] = float(score)
-        doc_list_with_score.append(item_copy)
-
-    # 按得分降序排序
-    doc_list_with_score.sort(key=lambda x: x['score'], reverse=True)
     logger.info(f"排序完成！Top1 得分: {doc_list_with_score[0]['score'] if doc_list_with_score else 0}")
     return doc_list_with_score
 

@@ -3,11 +3,9 @@ import sys
 
 from langchain_core.messages import HumanMessage
 
-from app.clients.milvus_utils import create_hybrid_search_requests, get_milvus_client, hybrid_search
-from app.conf.milvus_config import milvus_config
 from app.core.load_prompt import load_prompt
-from app.lm.embedding_utils import generate_embeddings
 from app.lm.lm_utils import get_llm_client
+from app.retrieval import get_retrieval
 from app.utils.task_utils import  add_done_task,add_running_task
 from app.core.logger import logger
 
@@ -59,41 +57,13 @@ def step_2_search_embedding_hyde(
     if not hyde_doc:
         raise ValueError("hypothetical_doc 不能为空")
 
-    #拼接
-    combined_text = rewritten_query + " " + hyde_doc
-    logger.info(f"Step 2: 拼接 Query + HyDE Doc, 总长度: {len(combined_text)}")
-    #向量化
-    logger.info("Step 2: 正在生成混合向量 (Embedding)...")
-    embedding_contents = generate_embeddings([combined_text])
-    quoted = ", ".join(f'"{v}"' for v in item_names) if item_names else ""
-    # 构造最终过滤表达式（如果 item_names 为空，则全局无过滤检索）
-    expr = f"item_name in [{quoted}]" if item_names else None
-    #设置request
-    res = create_hybrid_search_requests(
-        dense_vector=embedding_contents['dense'][0],
-        sparse_vector=embedding_contents['sparse'][0],
-        limit=req_limit,
-        expr=expr
+    logger.info(f"Step 2: Query + HyDE Doc 总长度: {len(rewritten_query + ' ' + hyde_doc)}")
+    chunks = get_retrieval().search_chunks_with_hyde(
+        query=rewritten_query,
+        hyde_doc=hyde_doc,
+        item_names=item_names,
+        top_k=top_k,
     )
-    #进行查找
-    # 搜索client
-    milvus_client = get_milvus_client()
-    if not milvus_client:
-        logger.error("无法连接到 Milvus")
-        return milvus_client
-
-    # 定义权重重排
-    response = hybrid_search(
-        client=milvus_client,
-        collection_name=milvus_config.chunks_collection,
-        reqs=res,
-        ranker_weights=(0.9, 0.1),
-        limit=top_k,  # 最终返回的TOP5相似度最高结果
-        norm_score=True,  # 是否返回分数
-        output_fields=["chunk_id", "content", "item_name", "file_title", "parent_title"]  # 指定返回的业务字段
-    )
-    #校验
-    chunks = response[0] if response else []
     logger.info(f"假设性问题检索结果: {chunks}")
     return chunks
 
