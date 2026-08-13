@@ -1,23 +1,15 @@
-import base64
 import os
-import re
 import sys
-import time
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from collections import deque
 from pathlib import Path
 
-from minio.deleteobjects import DeleteObject
-
-from app.clients.minio_utils import get_minio_client
-from app.conf.minio_config import minio_config
-from app.conf.lm_config import lm_config
-from app.core.load_prompt import load_prompt
 from app.core.logger import logger
+from app.import_process.agent.image_enrichment import summarize_images
+from app.import_process.agent.image_storage import get_image_storage
+from app.import_process.agent.markdown_image_rewriter import (
+    compile_markdown_image_reference_pattern,
+    replace_markdown_images,
+)
 from app.import_process.agent.state import ImportGraphState
-from app.lm.lm_utils import get_llm_client, get_vlm_client
-from app.utils.rate_limit_utils import apply_api_rate_limit
 from app.utils.task_utils import add_running_task, add_done_task
 
 """
@@ -38,7 +30,7 @@ from app.utils.task_utils import add_running_task, add_done_task
     :return summary {"图片名":(描述，内容)}
  5.将sction 中的文档切块保存到文件中进行备份
 """
-IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png","gif",".bmp",".webp"]
+IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]
 def is_supported_image(filename: str) -> bool:
     """
     判断文件是否为MinIO 支持的图片格式(后缀不区分大小写）
@@ -74,7 +66,7 @@ def step_1_validate_paths(state: ImportGraphState):
 
 def find_image_in_md_content(md_content, img_file, context_length: int = 100):
     # 正则表达式
-    pattern = re.compile(r"!\[.*?\]\(.*?" + img_file + ".*?\)")
+    pattern = compile_markdown_image_reference_pattern(img_file)
     content = None  # 存储图片多处使用
 
     # 【安全改进】：使用 next() 获取迭代器的第一个元素，若为空则返回 None，避免 IndexError
@@ -125,85 +117,15 @@ def step_3_generate_img_summaries(targets, name):
     :param name: 文件名
     :return: summaries 字典 {img_file: summary}
     """
-    summaries = {}
-    total_count = len(targets)
-    if total_count == 0:
+    if not targets:
         logger.info("[step_3_generate_img_summaries] targets 为空，跳过图片识别")
-        return summaries
-
-    # 针对多图场景开启多线程并发处理（开启 5 个并发线程）
-    max_workers = min(5, total_count)
-    logger.info(f"[step_3_generate_img_summaries] 开始多线程并发处理图片描述，共 {total_count} 张图片，开启 {max_workers} 个并发线程")
-
-    request_times = deque()
-    rate_lock = threading.Lock()
-
-    def process_single_image(item):
-        idx, (img_file, image_path, context) = item
-
-        # 线程安全的 API 限速控制
-        with rate_lock:
-            apply_api_rate_limit(request_times=request_times, max_requests=9)
-
-        start_t = time.time()
-        logger.info(f"[step_3_generate_img_summaries] ({idx}/{total_count}) 🚀 开始并发调用 VLM 识别图片: {img_file}")
-
-        # 1. 使用独立视觉大模型客户端（带独立的 URL、API_KEY 与超时设置）
-        vm_model = get_vlm_client()
-        # 准备提示词
-        prompts = load_prompt(name="image_summary", root_folder=name, image_content=context)
-        with open(image_path, "rb") as f:
-            image_base64 = base64.b64encode(f.read()).decode("utf-8")
-
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{image_base64}"
-                        },
-                    },
-                    {"type": "text", "text": f"{prompts}"}
-                ]
-            }
-        ]
-
-        # 2. 执行获取总结，支持 1 次自动退避重试，防止大模型服务端高并发 500 异常
-        for attempt in range(1, 3):
-            try:
-                response = vm_model.invoke(messages)
-                summary = response.content.strip().replace("\n", "")
-                cost_t = round(time.time() - start_t, 2)
-                logger.info(f"[step_3_generate_img_summaries] ({idx}/{total_count}) ✅ 图片【{img_file}】VLM 识别完成 (耗时 {cost_t}s): {summary[:40]}...")
-                return img_file, summary
-            except Exception as e:
-                if attempt == 1:
-                    logger.warning(f"[step_3_generate_img_summaries] ({idx}/{total_count}) ⚠️ 图片【{img_file}】第1次调用遇到抖动/异常({e})，1秒后自动重试...")
-                    time.sleep(1.0)
-                else:
-                    cost_t = round(time.time() - start_t, 2)
-                    logger.warning(f"[step_3_generate_img_summaries] ({idx}/{total_count}) ⚠️ 图片【{img_file}】重试后仍处理失败 (总耗时 {cost_t}s): {e}")
-                    # 当视觉模型超时或异常时，不添加任何默认占位/伪描述，保持为空
-                    return img_file, ""
-
-    # 使用 ThreadPoolExecutor 并发处理所有图片
-    items_to_process = list(enumerate(targets, 1))
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_item = {executor.submit(process_single_image, item): item for item in items_to_process}
-        for future in as_completed(future_to_item):
-            img_file, summary = future.result()
-            summaries[img_file] = summary
-
-    logger.info(f"[step_3_generate_img_summaries] 所有 {total_count} 张图片并发处理完毕！总结汇总：{summaries}")
-    return summaries
+        return {}
+    return summarize_images(targets, name)
 
 
 def step_4_upload_images_and_replace_md(summarise, targets, md_content, stem):
     """
-        将图片传递到minio 服务器
-        替换原md 中的图片和描述
+        上传图片并替换原md 中的图片和描述
     :param summarise: 图片名:描述
     :param targets: (图片名，原地址，(上下文))
     :param md_content: 原md 内容
@@ -213,49 +135,16 @@ def step_4_upload_images_and_replace_md(summarise, targets, md_content, stem):
     if not targets:
         logger.info("[step_4_upload_images_and_replace_md] targets为空，无需上传图片至MinIO")
         return md_content
-    #获取连接client
-    minio_client = get_minio_client()
-    #获取要删除的对象
-    object_list = minio_client.list_objects(
-        bucket_name=minio_config.bucket_name,
-        prefix=f"{minio_config.minio_img_dir[1:]}/{stem}",
-        recursive=True,#递归
-    )
-    #将object_list 转为DeleteObject
-    delete_object_list = [DeleteObject(obj.object_name) for obj in object_list]
-    #调用方法进行删除
-    errors = minio_client.remove_objects(minio_config.bucket_name,delete_object_list)
-    for error in errors:
-        logger.error(f"删除对象失败{error}")
-    #上传文件到miniIO 服务器
-    #声明记录图片上传结果的字典
-    image_url = {"图片名.xx":"url"}
-    #targets：(图片名，图片地址，(上下文)
-    for image_file,image_path,_ in targets:
-        try:
-            minio_client.fput_object(
-                bucket_name=minio_config.bucket_name,
-                object_name=f"{minio_config.minio_img_dir}/{stem}/{image_file}",#传入minio 桶后面的命名
-                file_path=image_path,
-                content_type="image/jpeg"
-            )
-            #上传完毕以后记录
-            #图片地址 = 协议+端口+桶+对象名
-            image_url[image_file] = f"http://{minio_config.endpoint}/{minio_config.bucket_name}{minio_config.minio_img_dir}/{stem}/{image_file}"
-        except Exception as e:
-            logger.error(f"上传图片失败：{image_file},失败原因：{e}")
 
-    #将md 中的图片进行替换
-    image_infos = {}
-    for image_file,summary in summarise.items():
-        if url := image_url.get(image_file):
-            image_infos[image_file] = (summary,url)
+    image_targets = [(image_file, image_path) for image_file, image_path, _ in targets]
+    image_url = get_image_storage().replace_images_for_document(stem, image_targets)
+    image_infos = {
+        image_file: (summarise.get(image_file, ""), url)
+        for image_file, url in image_url.items()
+    }
     logger.info(f"图片处理的汇总结果：{image_infos}")
     if image_infos:
-        #使用正则
-        for image_file,(summary,url) in image_infos.items():
-            rep = re.compile(r"!\[.*?\]\(.*?"+image_file+".*?\)")
-            md_content = rep.sub(f"![{summary}]({url})",md_content)
+        md_content = replace_markdown_images(md_content, image_infos)
         logger.info(f"已完成md_content替换，新的md_content为{md_content}")
     return md_content
 

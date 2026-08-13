@@ -47,13 +47,14 @@ def node_bge_embedding(state: ImportGraphState) -> ImportGraphState:
         state["chunks"] = finally_chunks
         logger.info(f"--- BGE-M3 向量化 处理完成，共处理{len(finally_chunks)} 条数据")
     except Exception as e:
-        logger.error(f"[{function_name}] 使用 node_bge_embedding 解析出现异常 异常信息：{e}")
+        logger.error(f"[{function_name}] 使用 node_bge_embedding 解析出现异常 异常信息：{e}", exc_info=True)
+        raise
     finally:
         # . 进入的日志和任务状态的配置
         logger.info(f">>> [{function_name}]结束执行了！现在的状态为：{state}")
-        add_done_task(state["task_id"], function_name)
 
-        return state
+    add_done_task(state["task_id"], function_name)
+    return state
 if __name__ == '__main__':
     # 加载环境变量：定位项目根目录下的.env，读取模型路径/设备等配置
     current_dir = os.path.dirname(os.path.abspath(__file__))

@@ -113,7 +113,21 @@ MILVUS_URL=http://127.0.0.1:19530
 MONGO_URL=mongodb://127.0.0.1:27017
 MONGO_DB_NAME=kb002
 MINIO_ENDPOINT=127.0.0.1:9000
+
+# 2 核 2G 环境建议使用远程混合向量服务
+EMBEDDING_ADAPTER=dashscope
+EMBEDDING_MODEL=qwen3.7-text-embedding
+EMBEDDING_DIMENSION=1024
+EMBEDDING_OUTPUT_TYPE=dense&sparse
+DASHSCOPE_API_KEY=your_dashscope_api_key
 ```
+
+远程模式不会在导入、检索和切片编辑链路加载本地 BGE-M3 模型。切换 Embedding
+模型后必须清空并重新生成 `kb_chunks` 与 `kb_item_names` 中的历史向量；即使 dense
+维度同为 1024，Qwen 与 BGE-M3 的向量空间也不兼容，不能混合检索。
+
+当前仍保留 `local` adapter，因此基础依赖中仍包含本地模型相关包。若要同时缩小部署
+镜像，需要进一步把 Torch、FlagEmbedding 与 `pymilvus-model` 拆为本地模式可选依赖。
 
 ### 4. 启动应用后端与前端
 

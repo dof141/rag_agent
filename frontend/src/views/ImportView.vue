@@ -55,7 +55,7 @@
               <span class="file-name">{{ task.file_name }}</span>
               <span class="file-size">({{ task.file_size }})</span>
               <span v-if="task.total_duration !== undefined && task.total_duration > 0" class="total-duration">
-                ⏱️ 总耗时 {{ task.total_duration.toFixed(2) }}s
+                ⏱️ 导入处理耗时 {{ task.total_duration.toFixed(2) }}s
               </span>
             </div>
 

@@ -4,6 +4,7 @@ import sys
 from pymilvus import DataType
 
 from app.clients.milvus_utils import get_milvus_client
+from app.conf.embedding_config import embedding_config
 from app.conf.milvus_config import milvus_config
 from app.core.logger import logger
 from app.import_process.agent.nodes.node_bge_embedding import node_bge_embedding
@@ -37,7 +38,11 @@ def step_2_prepare_collections(milvus_client,state):
         schema.add_field(field_name="title", datatype=DataType.VARCHAR, max_length=65535)
         schema.add_field(field_name="parent_title", datatype=DataType.VARCHAR, max_length=65535)
         schema.add_field(field_name="part", datatype=DataType.INT8)
-        schema.add_field(field_name="dense_vector", datatype=DataType.FLOAT_VECTOR,dim=1024)
+        schema.add_field(
+            field_name="dense_vector",
+            datatype=DataType.FLOAT_VECTOR,
+            dim=embedding_config.dimension,
+        )
         schema.add_field(field_name="sparse_vector", datatype=DataType.SPARSE_FLOAT_VECTOR)
         # 配置索引
         index_params = milvus_client.prepare_index_params()
@@ -130,13 +135,14 @@ def node_import_milvus(state: ImportGraphState) -> ImportGraphState:
         with_id_chunks = step_4_insert_collections(milvus_client,chunks)
         state['chunks'] = with_id_chunks
     except Exception as e:
-        logger.error(f"[{function_name}] 使用 milvus 解析出现异常 异常信息：{e}")
+        logger.error(f"[{function_name}] 使用 milvus 解析出现异常 异常信息：{e}", exc_info=True)
+        raise
     finally:
         # . 进入的日志和任务状态的配置
         logger.info(f">>> [{function_name}]结束执行了！现在的状态为：{state}")
-        add_done_task(state["task_id"], function_name)
 
-        return state
+    add_done_task(state["task_id"], function_name)
+    return state
 
 
 # ==========================================

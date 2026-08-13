@@ -14,7 +14,11 @@ from app.core.logger import logger
 _llm_client_cache = {}
 
 
-def get_llm_client(model: Optional[str] = None, json_mode: bool = False) -> ChatOpenAI:
+def get_llm_client(
+    model: Optional[str] = None,
+    json_mode: bool = False,
+    timeout: Optional[float] = None,
+) -> ChatOpenAI:
     """
     获取带全局缓存的LangChain ChatOpenAI客户端实例
     适配OpenAI/千问/即梦AI等**OpenAI兼容API**，支持自定义模型和JSON标准化输出
@@ -29,7 +33,7 @@ def get_llm_client(model: Optional[str] = None, json_mode: bool = False) -> Chat
     # 1. 确定目标模型（优先级递减，保证模型名非空）
     target_model = model or lm_config.llm_model or "qwen3-32b"
     # 缓存键：模型名+JSON模式，唯一标识不同配置的客户端
-    cache_key = (target_model, json_mode)
+    cache_key = (target_model, json_mode, timeout)
 
     # 2. 缓存命中：直接返回已初始化的实例，避免重复创建
     if cache_key in _llm_client_cache:
@@ -65,6 +69,7 @@ def get_llm_client(model: Optional[str] = None, json_mode: bool = False) -> Chat
             base_url=lm_config.base_url,  # API基础地址（适配国产模型代理地址）
             extra_body=extra_body if extra_body else None,  # 国产模型私有参数透传
             model_kwargs=model_kwargs,  # OpenAI通用参数
+            request_timeout=timeout,
         )
     except LangChainException as e:
         raise Exception(f"[LLM客户端] 模型【{target_model}】初始化失败（LangChain层）：{str(e)}") from e

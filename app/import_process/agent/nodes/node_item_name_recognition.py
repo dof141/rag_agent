@@ -1,10 +1,13 @@
 import os
 import sys
+from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pymilvus import DataType
 
 from app.clients.milvus_utils import get_milvus_client
+from app.conf.embedding_config import embedding_config
+from app.conf.lm_config import lm_config
 from app.conf.milvus_config import milvus_config
 from app.core.load_prompt import load_prompt
 from app.core.logger import logger
@@ -31,6 +34,7 @@ DEFAULT_ITEM_NAME_CHUNK_K = 5
 SINGLE_CHUNK_CONTENT_MAX_LEN = 800
 # 大模型上下文总字符数上限：适配主流大模型输入限制，默认2500
 CONTEXT_TOTAL_MAX_CHARS = 2500
+ITEM_NAME_TIMEOUT_SECONDS = lm_config.item_name_timeout
 
 
 def step_1_get_chunks(state: ImportGraphState):
@@ -80,21 +84,27 @@ def step_3_call_llm(context, file_title):
     :param file_title:
     :return:
     """
-    #遍历
-    #创建提示词
-    prompt = load_prompt("item_name_recognition",file_title=file_title,context=context)
-    #系统提示词
-    system_prompt = load_prompt("product_recognition_system")
-    #大模型
-    llm = get_llm_client(json_mode=False)
-    messages = [
-        HumanMessage(content=prompt),
-        SystemMessage(content=system_prompt)
-    ]
-    item_name=llm.invoke(messages).content
-    if not item_name:
-        item_name = file_title
-    return item_name
+    fallback_name = Path(file_title).stem
+    try:
+        prompt = load_prompt(
+            "item_name_recognition",
+            file_title=file_title,
+            context=context,
+        )
+        system_prompt = load_prompt("product_recognition_system")
+        llm = get_llm_client(
+            json_mode=False,
+            timeout=ITEM_NAME_TIMEOUT_SECONDS,
+        )
+        messages = [
+            HumanMessage(content=prompt),
+            SystemMessage(content=system_prompt),
+        ]
+        item_name = llm.invoke(messages).content
+        return item_name.strip() if item_name and item_name.strip() else fallback_name
+    except Exception as e:
+        logger.warning(f"主题识别失败，使用文件名作为主题：{fallback_name}，原因：{e}")
+        return fallback_name
 
 def step_4_update_chunks_and_state(state, item_name, chunks):
     """
@@ -148,7 +158,11 @@ def step_6_save_to_vector_db(file_title,item_name, dense_vector, sparse_vector):
         schema.add_field(field_name="pk",datatype=DataType.INT64,is_primary=True)
         schema.add_field(field_name="file_title",datatype=DataType.VARCHAR,max_length=65535)
         schema.add_field(field_name="item_name",datatype=DataType.VARCHAR,max_length=65535)
-        schema.add_field(field_name="dense_vector",datatype=DataType.FLOAT_VECTOR,dim=1024)
+        schema.add_field(
+            field_name="dense_vector",
+            datatype=DataType.FLOAT_VECTOR,
+            dim=embedding_config.dimension,
+        )
         schema.add_field(field_name="sparse_vector",datatype=DataType.SPARSE_FLOAT_VECTOR)
         #配置索引
         index_params = milvus_client.prepare_index_params()
@@ -235,12 +249,13 @@ def node_item_name_recognition(state: ImportGraphState) -> ImportGraphState:
     except Exception as e:
         # 加上 exc_info=True，把具体的错误堆栈打出来！
         logger.error(f"[{func_name}] 节点出现异常: {str(e)}", exc_info=True)
+        raise
     finally:
         # 结束当前节点信息，用于任务监控和日志溯源
         logger.info(f">>> 结束执行核心节点：【文档切分】{func_name}")
-        # 将当前节点加入运行中任务，更新全局任务状态
-        add_done_task(state["task_id"], func_name)
-        return state
+
+    add_done_task(state["task_id"], func_name)
+    return state
 
 
 

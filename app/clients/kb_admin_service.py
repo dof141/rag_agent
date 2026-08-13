@@ -147,20 +147,11 @@ def update_single_chunk(chunk_id: Any, new_content: str) -> Dict[str, Any]:
         target = existing[0]
 
         # 重新生成向量
-        from app.lm.embedding_utils import get_bge_m3_ef
-        bge_ef = get_bge_m3_ef()
-        emb = bge_ef.encode_documents([new_content])
+        from app.lm.embedding_utils import generate_embeddings
 
-        dense_vec = emb["dense"][0].tolist() if hasattr(emb["dense"][0], "tolist") else list(emb["dense"][0])
-        sparse_vec = {}
-        if "sparse" in emb and len(emb["sparse"]) > 0:
-            raw_sparse = emb["sparse"][0]
-            if hasattr(raw_sparse, "nonzero"):
-                row, col = raw_sparse.nonzero()
-                for c in col:
-                    sparse_vec[int(c)] = float(raw_sparse[0, c])
-            elif isinstance(raw_sparse, dict):
-                sparse_vec = {int(k): float(v) for k, v in raw_sparse.items()}
+        emb = generate_embeddings([new_content])
+        dense_vec = emb["dense"][0]
+        sparse_vec = emb["sparse"][0]
 
         updated_data = [{
             "chunk_id": target["chunk_id"],
@@ -177,7 +168,7 @@ def update_single_chunk(chunk_id: Any, new_content: str) -> Dict[str, Any]:
         client.upsert(collection_name=milvus_config.chunks_collection, data=updated_data)
         client.flush(milvus_config.chunks_collection)
         logger.info(f"成功更新切片 [{chunk_id}] 文本并已写回 Milvus！")
-        return {"success": True, "message": f"成功更新切片 [{chunk_id}] 文本，已重新生成 1024 维 BGE 向量！"}
+        return {"success": True, "message": f"成功更新切片 [{chunk_id}] 文本并重新生成向量！"}
     except Exception as e:
         logger.error(f"更新切片失败: {e}")
         return {"success": False, "message": f"更新切片失败: {e}"}
