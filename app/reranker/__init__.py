@@ -7,6 +7,7 @@ from app.reranker.interface import (
     RerankerRequestError,
     RerankerResponseError,
 )
+from app.reranker.service import rerank_texts
 
 __all__ = [
     "RerankItem",
@@ -16,4 +17,5 @@ __all__ = [
     "RerankerProvider",
     "RerankerRequestError",
     "RerankerResponseError",
+    "rerank_texts",
 ]
