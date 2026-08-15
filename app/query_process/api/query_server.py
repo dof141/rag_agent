@@ -180,25 +180,28 @@ async def stream(request_id: str, request: Request):
     )
 
 # 获取历史聊天记录
+def _serialize_history_record(record: dict) -> dict:
+    return {
+        "_id": str(record.get("_id")) if record.get("_id") is not None else "",
+        "session_id": record.get("session_id", ""),
+        "role": record.get("role", ""),
+        "text": record.get("text", ""),
+        "rewritten_query": record.get("rewritten_query", ""),
+        "item_names": record.get("item_names", []),
+        "image_urls": record.get("image_urls", []),
+        "sources": record.get("sources", []),
+        "node_steps": record.get("node_steps", []),
+        "total_duration": record.get("total_duration", 0.0),
+        "warnings": record.get("warnings", []),
+        "ts": record.get("ts"),
+    }
+
+
 @app.get("/history/{sessionId}")
 def get_task_history(sessionId: str, limit: int = 10):
     try:
         records = get_recent_messages(sessionId, limit=limit)
-        items = []
-        for r in records:
-            items.append({
-                "_id": str(r.get("_id")) if r.get("_id") is not None else "",
-                "session_id": r.get("session_id", ""),
-                "role": r.get("role", ""),
-                "text": r.get("text", ""),
-                "rewritten_query": r.get("rewritten_query", ""),
-                "item_names": r.get("item_names", []),
-                "image_urls": r.get("image_urls", []),
-                "sources": r.get("sources", []),
-                "node_steps": r.get("node_steps", []),
-                "total_duration": r.get("total_duration", 0.0),
-                "ts": r.get("ts")
-            })
+        items = [_serialize_history_record(record) for record in records]
         return {"session_id": sessionId, "items": items}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"history error: {e}")

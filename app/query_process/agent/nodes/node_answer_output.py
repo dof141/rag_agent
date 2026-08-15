@@ -247,6 +247,7 @@ def step_5_write_history(state: QueryGraphState):
     sources = state.get("sources", [])
     node_steps = state.get("node_steps", STANDARD_COMPLETED_NODES)
     total_duration = state.get("total_duration", 0.0)
+    warnings = state.get("warnings", [])
 
     if answer and session_id:
         save_chat_message(
@@ -258,7 +259,8 @@ def step_5_write_history(state: QueryGraphState):
             image_urls=image_urls,
             sources=sources,
             node_steps=node_steps,
-            total_duration=total_duration
+            total_duration=total_duration,
+            warnings=warnings,
         )
         logger.info(f"完成了本次对话的 MongoDB 存储 (包含 node_steps 节点历史与总耗时 {total_duration}s)！")
 
@@ -337,7 +339,8 @@ def node_answer_output(state: QueryGraphState) -> dict:
                     "image_urls": real_images or [],
                     "sources": sources or [],
                     "node_steps": dynamic_completed_nodes,
-                    "total_duration": total_duration
+                    "total_duration": total_duration,
+                    "warnings": state.get("warnings", []),
                 }
             )
         else:
@@ -353,5 +356,6 @@ def node_answer_output(state: QueryGraphState) -> dict:
         "image_urls": state.get("image_urls", []),
         "sources": state.get("sources", []),
         "node_steps": state.get("node_steps", STANDARD_COMPLETED_NODES),
-        "total_duration": state.get("total_duration", 0.0)
+        "total_duration": state.get("total_duration", 0.0),
+        "warnings": state.get("warnings", []),
     }

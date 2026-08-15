@@ -89,7 +89,8 @@ def save_chat_message(
         image_urls: list = None,
         sources: list = None,
         node_steps: list = None,
-        total_duration: float = None
+        total_duration: float = None,
+        warnings: list = None,
 ) -> str:
     """
     写入/更新单条会话记录到MongoDB
@@ -109,6 +110,7 @@ def save_chat_message(
         "sources": sources or [],  # 保存知识库引用来源数组
         "node_steps": node_steps or [],  # 保存节点执行历史轨迹
         "total_duration": total_duration,  # 保存总运行时长（秒）
+        "warnings": warnings or [],  # 保存非致命降级告警
         "ts": ts  # 时间戳，排序和时间筛选维度
     }
 
@@ -261,15 +263,6 @@ def get_history_mongo_tool() -> HistoryMongoTool:
     # 返回单例实例
     return _history_mongo_tool
 
-
-# 模块加载时尝试初始化单例实例，实现预加载
-# 目的：将数据库连接的初始化提前到模块加载阶段，避免第一次调用接口时才建立连接（提升首次响应速度）
-try:
-    _history_mongo_tool = HistoryMongoTool()
-except Exception as e:
-    # 初始化失败时仅记录警告日志，不抛出异常
-    # 原因：模块加载阶段的异常可能导致整个程序启动失败，此处保留懒加载兜底（get_history_mongo_tool会再次尝试创建）
-    logging.warning(f"Could not initialize HistoryMongoTool on module load: {e}")
 
 # 主程序入口：仅当直接运行该脚本时执行，用于简单的功能测试
 if __name__ == "__main__":
