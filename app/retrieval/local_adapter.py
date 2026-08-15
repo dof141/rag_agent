@@ -4,11 +4,14 @@ from app.clients.milvus_utils import create_hybrid_search_requests, get_milvus_c
 from app.conf.milvus_config import milvus_config
 from app.core.logger import logger
 from app.lm.embedding_utils import generate_embeddings
-from app.lm.reranker_utils import get_reranker_model
-from app.retrieval.interface import SearchHit
+from app.reranker import rerank_texts
+from app.retrieval.interface import RerankedDocuments, SearchHit
 
 
 class LocalRetrievalAdapter:
+    def __init__(self, reranker=rerank_texts):
+        self._reranker = reranker
+
     def search_chunks(
         self,
         query: str,
@@ -94,26 +97,28 @@ class LocalRetrievalAdapter:
             final_result.append({"extracted": item_name, "matches": matches})
         return final_result
 
-    def rerank_documents(self, query: str, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        if not documents or not query:
-            return documents
+    def rerank_documents(
+        self,
+        query: str,
+        documents: List[Dict[str, Any]],
+    ) -> RerankedDocuments:
+        if not documents:
+            return RerankedDocuments(documents=[])
 
-        rerank_model = get_reranker_model()
-        pairs = [[query, doc["text"]] for doc in documents]
-        all_scores = []
-        for i in range(0, len(pairs), 4):
-            batch_scores = rerank_model.compute_score(pairs[i : i + 4], normalize=True)
-            if isinstance(batch_scores, float):
-                batch_scores = [batch_scores]
-            all_scores.extend(batch_scores)
+        outcome = self._reranker(query, [document["text"] for document in documents])
+        reranked_documents = []
+        for item in outcome.items:
+            document = dict(documents[item.index])
+            if item.score is not None:
+                document["score"] = item.score
+            reranked_documents.append(document)
 
-        scored_docs = []
-        for score, item in zip(all_scores, documents):
-            item_copy = dict(item)
-            item_copy["score"] = float(score)
-            scored_docs.append(item_copy)
-        scored_docs.sort(key=lambda x: x["score"], reverse=True)
-        return scored_docs
+        return RerankedDocuments(
+            documents=reranked_documents,
+            degraded=outcome.degraded,
+            warning_code=outcome.warning_code,
+            warning_message=outcome.warning_message,
+        )
 
     def _hybrid_search(
         self,

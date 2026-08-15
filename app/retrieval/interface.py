@@ -1,6 +1,15 @@
+from dataclasses import dataclass
 from typing import Any, Dict, List, Protocol
 
 SearchHit = Dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RerankedDocuments:
+    documents: List[Dict[str, Any]]
+    degraded: bool = False
+    warning_code: str | None = None
+    warning_message: str | None = None
 
 
 class Retrieval(Protocol):
@@ -26,5 +35,9 @@ class Retrieval(Protocol):
     def match_item_names(self, item_names: List[str]) -> List[Dict[str, Any]]:
         ...
 
-    def rerank_documents(self, query: str, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def rerank_documents(
+        self,
+        query: str,
+        documents: List[Dict[str, Any]],
+    ) -> RerankedDocuments:
         ...

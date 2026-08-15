@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import patch
 
+from app.retrieval.interface import RerankedDocuments
+
 
 class FakeRetrieval:
     def __init__(self):
@@ -20,7 +22,7 @@ class FakeRetrieval:
 
     def rerank_documents(self, query, documents):
         self.calls.append((query, documents))
-        return [dict(documents[0], score=0.99)]
+        return RerankedDocuments(documents=[dict(documents[0], score=0.99)])
 
 
 class RetrievalSeamTest(unittest.TestCase):
@@ -85,7 +87,47 @@ class RetrievalSeamTest(unittest.TestCase):
             )
 
         self.assertEqual(fake.calls, [("question", docs)])
-        self.assertEqual(result, [{"text": "candidate", "content": "candidate", "score": 0.99}])
+        self.assertEqual(
+            result,
+            RerankedDocuments(
+                documents=[
+                    {"text": "candidate", "content": "candidate", "score": 0.99}
+                ]
+            ),
+        )
+
+    def test_retrieval_maps_rerank_indexes_without_mutating_documents(self):
+        from app.reranker.interface import RerankItem, RerankOutcome
+        from app.retrieval.local_adapter import LocalRetrievalAdapter
+
+        docs = [
+            {"text": "first", "meta": 1},
+            {"text": "second", "meta": 2},
+        ]
+
+        def fake_reranker(query, texts):
+            self.assertEqual(query, "question")
+            self.assertEqual(texts, ["first", "second"])
+            return RerankOutcome(
+                items=[
+                    RerankItem(index=1, score=0.9),
+                    RerankItem(index=0, score=0.2),
+                ]
+            )
+
+        result = LocalRetrievalAdapter(reranker=fake_reranker).rerank_documents(
+            "question",
+            docs,
+        )
+
+        self.assertEqual(
+            [document["text"] for document in result.documents],
+            ["second", "first"],
+        )
+        self.assertEqual(result.documents[0]["meta"], 2)
+        self.assertEqual(result.documents[0]["score"], 0.9)
+        self.assertNotIn("score", docs[0])
+        self.assertNotIn("score", docs[1])
 
 
 if __name__ == "__main__":

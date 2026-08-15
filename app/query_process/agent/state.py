@@ -30,6 +30,7 @@ class QueryGraphState(TypedDict):
     item_names: List[str]  # 提取出的商品名称
     rewritten_query: str  # 改写后的问题
     history: list  # 历史对话记录
+    warnings: list[dict]  # 查询过程中产生的非致命降级告警
     is_stream: bool  # 是否流式输出标记
 
 
@@ -49,6 +50,7 @@ query_graph_default_state: QueryGraphState = {
     "item_names": [],
     "rewritten_query": "",
     "history": [],
+    "warnings": [],
     "is_stream": False,
     "request_id":"",
     "candidate_items":[],

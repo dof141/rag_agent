@@ -17,9 +17,12 @@ import time
 import sys
 
 from app.retrieval import get_retrieval
+from app.retrieval.interface import RerankedDocuments
 from app.query_process.agent.state import QueryGraphState
 from app.utils.task_utils import add_running_task, add_done_task
+from app.utils.sse_utils import SSEEvent, push_to_session
 from app.core.logger import logger
+from app.reranker.service import RERANKER_DEGRADED_CODE, RERANKER_DEGRADED_MESSAGE
 
 """
 负责对 RRF 算法后的召回结果与网络搜索结果进行非同源打分排序：
@@ -97,34 +100,55 @@ def step_1_merge_rrf_mcp(state: QueryGraphState) -> list[dict]:
     return doc_list
 
 
-def step_2_rerank_doc_list(doc_list: list[dict], state: QueryGraphState) -> list[dict]:
+def step_2_rerank_doc_list(
+    doc_list: list[dict],
+    state: QueryGraphState,
+) -> RerankedDocuments:
     """
     将问题与整合后的 chunks 发给 Rerank 模型进行 Batch 分批打分并降序排序
     """
     if not doc_list:
-        return []
+        return RerankedDocuments(documents=[])
 
     query = state.get('rewritten_query') or state.get("original_query") or ""
     if not query:
         logger.warning("Rerank 接收到的查询 Query 为空！")
-        return doc_list
+        return RerankedDocuments(
+            documents=[dict(document) for document in doc_list[:RERANK_MAX_TOPK]],
+            degraded=True,
+            warning_code=RERANKER_DEGRADED_CODE,
+            warning_message=RERANKER_DEGRADED_MESSAGE,
+        )
 
     try:
-        doc_list_with_score = get_retrieval().rerank_documents(query, doc_list)
+        reranked = get_retrieval().rerank_documents(query, doc_list)
     except Exception as e:
         logger.error(f"Rerank failed: {e}")
-        return doc_list
+        return RerankedDocuments(
+            documents=[dict(document) for document in doc_list[:RERANK_MAX_TOPK]],
+            degraded=True,
+            warning_code=RERANKER_DEGRADED_CODE,
+            warning_message=RERANKER_DEGRADED_MESSAGE,
+        )
 
-    logger.info(f"排序完成！Top1 得分: {doc_list_with_score[0]['score'] if doc_list_with_score else 0}")
-    return doc_list_with_score
+    if not reranked.degraded:
+        top_score = reranked.documents[0]["score"] if reranked.documents else 0
+        logger.info(f"排序完成！Top1 得分: {top_score}")
+    return reranked
 
 
-def step_3_topk(doc_list_with_score: list[dict]) -> list[dict]:
+def step_3_topk(
+    doc_list_with_score: list[dict],
+    *,
+    degraded: bool = False,
+) -> list[dict]:
     """
     进行防断崖处理：当后一条数据相比前一条数据分数急剧下降（产生断崖）时，截断后面的不相关数据。
     """
     if not doc_list_with_score:
         return []
+    if degraded:
+        return doc_list_with_score[:RERANK_MAX_TOPK]
 
     total_len = len(doc_list_with_score)
     max_topk = RERANK_MAX_TOPK
@@ -173,10 +197,25 @@ def node_rerank(state: QueryGraphState) -> dict:
         doc_list = step_1_merge_rrf_mcp(state)
 
         # 2. Rerank 模型计算得分与排序
-        doc_list_with_score = step_2_rerank_doc_list(doc_list, state)
+        reranked = step_2_rerank_doc_list(doc_list, state)
 
         # 3. 防断崖截取 TopK
-        topk_docs = step_3_topk(doc_list_with_score)
+        topk_docs = step_3_topk(
+            reranked.documents,
+            degraded=reranked.degraded,
+        )
+
+        if reranked.warning_code and reranked.warning_message:
+            warning = {
+                "code": reranked.warning_code,
+                "message": reranked.warning_message,
+            }
+            warnings = list(state.get("warnings") or [])
+            if not any(item.get("code") == warning["code"] for item in warnings):
+                warnings.append(warning)
+            state["warnings"] = warnings
+            if req_id and is_stream:
+                push_to_session(req_id, SSEEvent.WARNING, warning)
 
     except Exception as e:
         logger.exception(f"node_rerank 执行过程抛出异常: {e}")

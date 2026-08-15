@@ -11,6 +11,7 @@ class SSEEvent:
     DELTA = "delta"         # LLM 流式输出增量
     FINAL = "final"         # 最终完整答案
     ERROR = "error"         # 错误信息
+    WARNING = "warning"     # 非致命降级告警
     CLOSE = "__close__"     # 关闭连接信号
     CONFIRMATION_REQUIRED = "confirmation_required" #暂停信号
 
