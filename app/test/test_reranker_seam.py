@@ -27,6 +27,9 @@ def load_config_with_environment(environment):
 
 
 class RerankerConfigTest(unittest.TestCase):
+    def tearDown(self):
+        sys.modules.pop("app.conf.reranker_config", None)
+
     def test_reads_remote_and_local_settings(self):
         module, load_dotenv = load_config_with_environment(
             {
