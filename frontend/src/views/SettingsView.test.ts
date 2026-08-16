@@ -109,6 +109,21 @@ describe('SettingsView', () => {
     vi.clearAllMocks()
   })
 
+  it('展示向量模型和向量库配置的中文解释', async () => {
+    vi.mocked(authFetch).mockResolvedValueOnce(response(qdrantSettings))
+
+    const wrapper = mount(SettingsView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('向量模型配置')
+    expect(wrapper.text()).toContain('服务提供商：选择由哪家服务生成文本向量')
+    expect(wrapper.text()).toContain('模型名称：用于生成文本向量的具体模型')
+    expect(wrapper.text()).toContain('向量维度：必须与模型输出维度和向量库索引维度一致')
+    expect(wrapper.text()).toContain('Item 集合：保存学习主题或设备名称的向量索引')
+    expect(wrapper.text()).toContain('Chunks 集合：保存正文切片内容的向量索引')
+    expect(wrapper.text()).toContain('留空表示继续使用已保存的旧密钥')
+  })
+
   it('空密钥保留旧值，清除必须单独确认', async () => {
     vi.mocked(authFetch)
       .mockResolvedValueOnce(response(qdrantSettings))

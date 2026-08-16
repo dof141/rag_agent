@@ -15,45 +15,52 @@
     <p v-if="error" class="error">{{ error }}</p>
 
     <section class="settings-section">
-      <h3>Embedding</h3>
+      <h3>向量模型配置 <span>Embedding</span></h3>
       <div class="form-grid">
         <label>
-          <span>Provider</span>
+          <span class="field-title">服务提供商 <em>Provider</em></span>
+          <small>服务提供商：选择由哪家服务生成文本向量。</small>
           <select v-model="form.embedding_provider">
             <option value="siliconflow">SiliconFlow</option>
             <option value="local_bge_m3">Local BGE-M3</option>
           </select>
         </label>
         <label>
-          <span>Base URL</span>
+          <span class="field-title">接口地址 <em>Base URL</em></span>
+          <small>接口地址：向量模型服务的 API 根地址。</small>
           <input v-model="form.embedding_base_url" />
         </label>
         <label>
-          <span>Model</span>
+          <span class="field-title">模型名称 <em>Model</em></span>
+          <small>模型名称：用于生成文本向量的具体模型。</small>
           <input v-model="form.embedding_model" />
         </label>
         <label>
-          <span>Dimension</span>
+          <span class="field-title">向量维度 <em>Dimension</em></span>
+          <small>向量维度：必须与模型输出维度和向量库索引维度一致。</small>
           <input v-model.number="form.embedding_dimension" type="number" min="1" />
         </label>
         <label>
-          <span>Batch Size</span>
+          <span class="field-title">批处理数量 <em>Batch Size</em></span>
+          <small>批处理数量：每次请求向量模型时一起提交的文本条数。</small>
           <input v-model.number="form.embedding_batch_size" type="number" min="1" max="128" />
         </label>
         <label>
-          <span>Timeout</span>
+          <span class="field-title">超时时间 <em>Timeout</em></span>
+          <small>超时时间：单次向量生成请求最多等待的秒数。</small>
           <input v-model.number="form.embedding_timeout" type="number" min="1" max="300" />
         </label>
       </div>
       <div class="secret-row">
         <label>
-          <span>API Key</span>
+          <span class="field-title">访问密钥 <em>API Key</em></span>
+          <small>访问密钥：调用云端向量服务所需的授权凭证，留空表示继续使用已保存的旧密钥。</small>
           <input
             v-model="form.embedding_api_key"
             data-test="embedding-key"
             type="password"
             autocomplete="off"
-            placeholder="留空表示保留旧值"
+            placeholder="留空表示继续使用已保存的旧密钥"
           />
         </label>
         <span class="masked">{{ settings?.embedding_api_key.masked || '未配置' }}</span>
@@ -80,27 +87,34 @@
 
       <div v-if="form.vector_store_type === 'qdrant'" class="form-grid">
         <label>
-          <span>Qdrant URL</span>
+          <span class="field-title">Qdrant 地址 <em>Qdrant URL</em></span>
+          <small>Qdrant 地址：Qdrant 集群或云服务的连接地址。</small>
           <input v-model="form.qdrant_url" />
         </label>
         <label>
-          <span>Item Collection</span>
+          <span class="field-title">Item 集合 <em>Item Collection</em></span>
+          <small>Item 集合：保存学习主题或设备名称的向量索引。</small>
           <input v-model="form.qdrant_item_collection" />
         </label>
         <label>
-          <span>Chunks Collection</span>
+          <span class="field-title">Chunks 集合 <em>Chunks Collection</em></span>
+          <small>Chunks 集合：保存正文切片内容的向量索引。</small>
           <input v-model="form.qdrant_chunks_collection" />
         </label>
         <label class="checkbox-row">
           <input v-model="form.qdrant_cloud_inference" type="checkbox" />
-          <span>启用 Qdrant Cloud Inference</span>
+          <span>
+            <span class="field-title">启用云端推理 <em>Qdrant Cloud Inference</em></span>
+            <small>启用后由 Qdrant Cloud 处理稀疏向量相关能力。</small>
+          </span>
         </label>
       </div>
 
       <div v-if="form.vector_store_type === 'qdrant'" class="secret-row">
         <label>
-          <span>Qdrant API Key</span>
-          <input v-model="form.qdrant_api_key" type="password" autocomplete="off" placeholder="留空表示保留旧值" />
+          <span class="field-title">Qdrant 密钥 <em>Qdrant API Key</em></span>
+          <small>Qdrant 密钥：访问 Qdrant Cloud 或受保护实例所需的凭证，留空表示继续使用已保存的旧密钥。</small>
+          <input v-model="form.qdrant_api_key" type="password" autocomplete="off" placeholder="留空表示继续使用已保存的旧密钥" />
         </label>
         <span class="masked">{{ settings?.qdrant_api_key.masked || '未配置' }}</span>
         <button class="secondary-button" @click="clearSecret('qdrant_api_key')">清除</button>
@@ -108,23 +122,27 @@
 
       <div v-if="form.vector_store_type === 'milvus'" class="form-grid">
         <label>
-          <span>Milvus URL</span>
+          <span class="field-title">Milvus 地址 <em>Milvus URL</em></span>
+          <small>Milvus 地址：Milvus 服务的连接地址，例如本地或远程集群。</small>
           <input v-model="form.milvus_url" />
         </label>
         <label>
-          <span>Item Collection</span>
+          <span class="field-title">Item 集合 <em>Item Collection</em></span>
+          <small>Item 集合：保存学习主题或设备名称的向量索引。</small>
           <input v-model="form.milvus_item_collection" />
         </label>
         <label>
-          <span>Chunks Collection</span>
+          <span class="field-title">Chunks 集合 <em>Chunks Collection</em></span>
+          <small>Chunks 集合：保存正文切片内容的向量索引。</small>
           <input v-model="form.milvus_chunks_collection" />
         </label>
       </div>
 
       <div v-if="form.vector_store_type === 'milvus'" class="secret-row">
         <label>
-          <span>Milvus Token</span>
-          <input v-model="form.milvus_token" type="password" autocomplete="off" placeholder="留空表示保留旧值" />
+          <span class="field-title">Milvus Token <em>Milvus Token</em></span>
+          <small>Milvus Token：访问 Milvus 云服务或启用鉴权实例时使用，留空表示继续使用已保存的旧密钥。</small>
+          <input v-model="form.milvus_token" type="password" autocomplete="off" placeholder="留空表示继续使用已保存的旧密钥" />
         </label>
         <span class="masked">{{ settings?.milvus_token.masked || '未配置' }}</span>
         <button class="secondary-button" @click="clearSecret('milvus_token')">清除</button>
@@ -267,14 +285,21 @@ async function clearSecret(name: 'embedding_api_key' | 'qdrant_api_key' | 'milvu
 
 .settings-section h3 {
   margin: 0;
-  font-size: 16px;
+  font-size: 18px;
   color: var(--text-primary);
+}
+
+.settings-section h3 span {
+  margin-left: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
 }
 
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
 }
 
 label {
@@ -282,6 +307,26 @@ label {
   gap: 6px;
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+.field-title {
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.field-title em {
+  margin-left: 4px;
+  color: var(--text-muted);
+  font-style: normal;
+  font-weight: 500;
+}
+
+small {
+  min-height: 34px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 input,
@@ -296,13 +341,20 @@ select {
 
 .checkbox-row {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 10px;
+  padding-top: 23px;
 }
 
 .checkbox-row input {
   width: 16px;
   height: 16px;
+  margin-top: 2px;
+}
+
+.checkbox-row > span {
+  display: grid;
+  gap: 4px;
 }
 
 .secret-row {

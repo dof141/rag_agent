@@ -134,18 +134,15 @@ class QdrantVectorStoreTest(unittest.TestCase):
             ),
         )
 
-    def test_import_creates_hybrid_schema_and_replaces_one_user_document(self):
+    def test_import_replaces_one_user_document_when_collections_exist(self):
         client = RecordingQdrantClient()
+        client.existing_collections = {"items", "chunks"}
         store = QdrantVectorStore(self.config(), client=client, models_module=FakeModels)
 
         result = store.import_document(self.document())
 
         self.assertEqual(result, VectorImportResult(item_count=1, chunk_count=2))
-        self.assertEqual({call["collection_name"] for call in client.created}, {"items", "chunks"})
-        for call in client.created:
-            self.assertEqual(call["vectors_config"]["dense"].size, 2)
-            self.assertEqual(call["vectors_config"]["dense"].distance, "COSINE")
-            self.assertEqual(call["sparse_vectors_config"]["bm25"].modifier, "IDF")
+        self.assertEqual(client.created, [])
         self.assertEqual(len(client.deleted), 2)
         self.assertTrue(
             all(
@@ -162,6 +159,20 @@ class QdrantVectorStoreTest(unittest.TestCase):
         chunk_points = [point for call in client.upserts[1:] for point in call["points"]]
         self.assertEqual([point.payload["chunk_index"] for point in chunk_points], [0, 1])
         self.assertEqual(chunk_points[0].vector["bm25"].text, "first chunk")
+
+    def test_import_creates_hybrid_schema_without_deleting_empty_new_collections(self):
+        client = RecordingQdrantClient()
+        store = QdrantVectorStore(self.config(), client=client, models_module=FakeModels)
+
+        result = store.import_document(self.document())
+
+        self.assertEqual(result, VectorImportResult(item_count=1, chunk_count=2))
+        self.assertEqual({call["collection_name"] for call in client.created}, {"items", "chunks"})
+        for call in client.created:
+            self.assertEqual(call["vectors_config"]["dense"].size, 2)
+            self.assertEqual(call["vectors_config"]["dense"].distance, "COSINE")
+            self.assertEqual(call["sparse_vectors_config"]["bm25"].modifier, "IDF")
+        self.assertEqual(client.deleted, [])
 
     def test_failure_is_reported_without_provider_details(self):
         client = RecordingQdrantClient(fail_upsert=True)

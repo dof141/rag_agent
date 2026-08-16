@@ -37,19 +37,21 @@ class QdrantVectorStore(VectorStore):
     def import_document(self, document: VectorDocument) -> VectorImportResult:
         try:
             document.validate(expected_dimension=self._config.dimension, require_sparse=False)
-            self._ensure_collection(self._config.item_collection)
-            self._ensure_collection(self._config.chunks_collection)
+            item_collection_exists = self._ensure_collection(self._config.item_collection)
+            chunks_collection_exists = self._ensure_collection(self._config.chunks_collection)
             document_filter = self._document_filter(document)
-            self._client.delete(
-                collection_name=self._config.item_collection,
-                points_selector=document_filter,
-                wait=True,
-            )
-            self._client.delete(
-                collection_name=self._config.chunks_collection,
-                points_selector=document_filter,
-                wait=True,
-            )
+            if item_collection_exists:
+                self._client.delete(
+                    collection_name=self._config.item_collection,
+                    points_selector=document_filter,
+                    wait=True,
+                )
+            if chunks_collection_exists:
+                self._client.delete(
+                    collection_name=self._config.chunks_collection,
+                    points_selector=document_filter,
+                    wait=True,
+                )
             self._client.upsert(
                 collection_name=self._config.item_collection,
                 points=[self._item_point(document)],
@@ -68,9 +70,9 @@ class QdrantVectorStore(VectorStore):
         except Exception as exc:
             raise VectorStoreError("Qdrant 向量写入失败") from exc
 
-    def _ensure_collection(self, collection_name: str) -> None:
+    def _ensure_collection(self, collection_name: str) -> bool:
         if self._client.collection_exists(collection_name):
-            return
+            return True
         self._client.create_collection(
             collection_name=collection_name,
             vectors_config={
@@ -85,6 +87,7 @@ class QdrantVectorStore(VectorStore):
                 )
             },
         )
+        return False
 
     def _document_filter(self, document: VectorDocument):
         return self._models.Filter(
