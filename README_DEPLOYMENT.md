@@ -82,6 +82,9 @@ graph TD
 
 ## 🚀 快速开始与 Docker 一键部署
 
+远程向量导入链路的管理员登录、运行配置、Milvus 重建和回滚步骤见
+[远程向量导入运维说明](docs/remote-vector-import-operations.md)。该文档只列变量名和占位符，不包含任何真实凭据。
+
 ### 1. 克隆项目
 ```bash
 git clone https://github.com/dof141/rag_agent.git
