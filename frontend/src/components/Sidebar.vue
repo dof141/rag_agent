@@ -54,6 +54,15 @@
         <Clock class="nav-icon" />
         <span v-if="!store.isSidebarCollapsed" class="nav-label">历史会话管理</span>
       </router-link>
+
+      <router-link
+        to="/settings"
+        class="nav-item"
+        :class="{ 'active': route.path === '/settings' }"
+      >
+        <Settings class="nav-icon" />
+        <span v-if="!store.isSidebarCollapsed" class="nav-label">运行配置</span>
+      </router-link>
     </nav>
 
     <!-- Bottom Status & Actions -->
@@ -61,11 +70,11 @@
       <div v-if="!store.isSidebarCollapsed" class="status-card">
         <div class="status-row">
           <span class="dot online"></span>
-          <span class="status-text">Milvus 向量库: 连通</span>
+          <span class="status-text">运行配置已加载</span>
         </div>
         <div class="status-row">
           <span class="dot online"></span>
-          <span class="status-text">MinIO 存储: 正常</span>
+          <span class="status-text">上传链路待配置</span>
         </div>
       </div>
 
@@ -79,28 +88,42 @@
           <ChevronLeft v-if="!store.isSidebarCollapsed" class="action-icon" />
           <ChevronRight v-else class="action-icon" />
         </button>
+
+        <button class="action-btn" @click="logout" title="退出登录">
+          <LogOut class="action-icon" />
+        </button>
       </div>
     </div>
   </aside>
 </template>
 
 <script setup lang="ts">
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '../stores/appStore'
+import { useAuthStore } from '../stores/authStore'
 import { 
   MessageSquare, 
   UploadCloud, 
   Database, 
   Clock, 
+  Settings,
   Cpu, 
   Sun, 
   Moon, 
   ChevronLeft, 
-  ChevronRight 
+  ChevronRight,
+  LogOut
 } from 'lucide-vue-next'
 
 const route = useRoute()
+const router = useRouter()
 const store = useAppStore()
+const auth = useAuthStore()
+
+function logout() {
+  auth.logout()
+  router.replace('/login')
+}
 </script>
 
 <style scoped>

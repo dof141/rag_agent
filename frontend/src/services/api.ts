@@ -1,5 +1,16 @@
-import type { KBItem, KBChunk, ChatSession, ChatMessage, ImportTask, SystemStats, CandidateItem } from '../types'
+import type {
+  KBItem,
+  KBChunk,
+  ChatSession,
+  ChatMessage,
+  ImportTask,
+  SystemStats,
+  CandidateItem,
+  RuntimeSettingsResponse,
+  RuntimeSettingsUpdate,
+} from '../types'
 import { mockStats, mockKBItems, mockKBChunks, mockSessions } from '../mock/mockData'
+import { authFetch } from './http'
 
 const API_BASE = ''
 
@@ -15,8 +26,8 @@ const PIPELINE_NODES_CONFIG = [
   { node_id: 'node_md_img', name: 'MD图片处理', description: 'VLM 描述图片并上传 MinIO' },
   { node_id: 'node_document_split', name: '文档智能切片', description: '标题感知层级切片' },
   { node_id: 'node_item_name_recognition', name: '学习主题识别', description: 'LLM 识别主题与索引构建' },
-  { node_id: 'node_bge_embedding', name: 'BGE-M3 向量化', description: 'Dense+Sparse 混合向量生成' },
-  { node_id: 'node_import_milvus', name: 'Milvus 向量入库', description: '幂等清理与批量数据落盘' }
+  { node_id: 'node_generate_embeddings', name: '向量生成', description: '按当前配置生成文档向量' },
+  { node_id: 'node_import_vector_store', name: '向量入库', description: '幂等写入所选向量库' }
 ]
 
 const TASKS_STORAGE_KEY = 'rag_import_tasks'
@@ -48,8 +59,27 @@ const CN_NAME_MAP: Record<string, string> = {
   node_md_img: 'Markdown图片处理',
   node_document_split: '文档切分',
   node_item_name_recognition: '主体名称识别',
-  node_bge_embedding: '向量生成',
-  node_import_milvus: '导入向量库',
+  node_generate_embeddings: '向量生成',
+  node_import_vector_store: '导入向量库',
+}
+
+export class ApiError extends Error {
+  readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+async function parseJsonResponse<T>(response: Response): Promise<T> {
+  const data = await response.json().catch(() => null)
+  if (!response.ok) {
+    const message = typeof data?.detail === 'string' ? data.detail : `请求失败：${response.status}`
+    throw new ApiError(response.status, message)
+  }
+  return data as T
 }
 
 function isNodeInList(nodeId: string, nodeName: string, list: string[]): boolean {
@@ -103,7 +133,7 @@ export const api = {
     files.forEach(file => formData.append('files', file))
 
     try {
-      const res = await fetch(`${API_BASE}/upload`, {
+      const res = await authFetch(`${API_BASE}/upload`, {
         method: 'POST',
         body: formData
       })
@@ -132,8 +162,11 @@ export const api = {
         saveTasksToStorage(currentTasks)
         return { task_ids: taskIds }
       }
+      await parseJsonResponse(res)
     } catch (e) {
-      console.error('调用后端 /upload 上传接口异常', e)
+      if (e instanceof ApiError) {
+        throw e
+      }
     }
 
     return { task_ids: [] }
@@ -146,7 +179,7 @@ export const api = {
     for (const task of tasks) {
       if (task.status === 'processing' || (task.status === 'failed' && !task.nodes.some(n => n.status === 'failed'))) {
         try {
-          const res = await fetch(`${API_BASE}/status/${task.task_id}?_=${Date.now()}`)
+          const res = await authFetch(`${API_BASE}/status/${task.task_id}?_=${Date.now()}`)
           if (res.ok) {
             const data = await res.json()
             const doneList: string[] = data.done_list || []
@@ -205,7 +238,7 @@ export const api = {
 
   async retryTask(taskId: string): Promise<boolean> {
     try {
-      const res = await fetch(`${API_BASE}/retry/${taskId}`, { method: 'POST' })
+      const res = await authFetch(`${API_BASE}/retry/${taskId}`, { method: 'POST' })
       if (res.ok) {
         const tasks = loadTasksFromStorage()
         const target = tasks.find(t => t.task_id === taskId)
@@ -225,7 +258,7 @@ export const api = {
         return true
       }
     } catch (e) {
-      console.error('调用后端 /retry 接口失败', e)
+      // 单次重试失败保持当前任务状态。
     }
     return false
   },
@@ -236,7 +269,7 @@ export const api = {
 
   async getTaskStatus(taskId: string): Promise<{ status: string; done_list: string[]; running_list: string[]; node_durations?: Record<string, number>; total_duration?: number }> {
     try {
-      const res = await fetch(`${API_BASE}/status/${taskId}`)
+      const res = await authFetch(`${API_BASE}/status/${taskId}`)
       if (res.ok) {
         return await res.json()
       }
@@ -244,6 +277,25 @@ export const api = {
       // 忽略
     }
     return { status: 'processing', done_list: [], running_list: [], node_durations: {}, total_duration: 0 }
+  },
+
+  async getRuntimeSettings(): Promise<RuntimeSettingsResponse | null> {
+    const response = await authFetch(`${API_BASE}/api/settings/runtime`)
+    return parseJsonResponse<RuntimeSettingsResponse | null>(response)
+  },
+
+  async saveRuntimeSettings(payload: RuntimeSettingsUpdate): Promise<RuntimeSettingsResponse> {
+    const response = await authFetch(`${API_BASE}/api/settings/runtime`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    return parseJsonResponse<RuntimeSettingsResponse>(response)
+  },
+
+  async clearRuntimeSecret(name: 'embedding_api_key' | 'qdrant_api_key' | 'milvus_token'): Promise<RuntimeSettingsResponse> {
+    const response = await authFetch(`${API_BASE}/api/settings/runtime/secrets/${name}`, { method: 'DELETE' })
+    return parseJsonResponse<RuntimeSettingsResponse>(response)
   },
 
   // === 真实智能问答与断点确认 API ===

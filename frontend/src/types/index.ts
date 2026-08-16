@@ -103,3 +103,53 @@ export interface SystemStats {
   minio_status: 'online' | 'offline' | 'degraded'
   mongo_status: 'online' | 'offline' | 'degraded'
 }
+
+export interface SecretStatus {
+  configured: boolean
+  masked: string | null
+}
+
+export type EmbeddingProvider = 'siliconflow' | 'local_bge_m3'
+export type VectorStoreType = 'qdrant' | 'milvus'
+
+export interface RuntimeSettingsResponse {
+  embedding_provider: EmbeddingProvider
+  embedding_base_url: string
+  embedding_model: string
+  embedding_dimension: number
+  embedding_batch_size: number
+  embedding_timeout: number
+  embedding_api_key: SecretStatus
+  vector_store_type: VectorStoreType
+  qdrant_url: string | null
+  qdrant_api_key: SecretStatus
+  qdrant_item_collection: string | null
+  qdrant_chunks_collection: string | null
+  qdrant_cloud_inference: boolean
+  milvus_url: string | null
+  milvus_token: SecretStatus
+  milvus_item_collection: string | null
+  milvus_chunks_collection: string | null
+  version: number
+  updated_at: string
+}
+
+export interface RuntimeSettingsUpdate {
+  embedding_provider: EmbeddingProvider
+  embedding_base_url: string
+  embedding_model: string
+  embedding_dimension: number
+  embedding_batch_size: number
+  embedding_timeout: number
+  embedding_api_key: string
+  vector_store_type: VectorStoreType
+  qdrant_url: string | null
+  qdrant_api_key: string
+  qdrant_item_collection: string | null
+  qdrant_chunks_collection: string | null
+  qdrant_cloud_inference: boolean
+  milvus_url: string | null
+  milvus_token: string
+  milvus_item_collection: string | null
+  milvus_chunks_collection: string | null
+}

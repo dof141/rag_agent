@@ -31,6 +31,11 @@
     </div>
 
     <div class="tasks-section">
+      <div v-if="uploadError" class="upload-error-banner">
+        <AlertCircle class="error-banner-icon" />
+        <span>{{ uploadError }}</span>
+      </div>
+
       <div class="section-header">
         <div class="header-left">
           <h3>📋 文档导入与节点监控 Task Pipeline</h3>
@@ -120,11 +125,12 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { UploadCloud, FolderPlus, FileText, Check, Loader2, Trash2, AlertCircle, RotateCcw } from 'lucide-vue-next'
 import type { ImportTask } from '../types'
-import { api } from '../services/api'
+import { api, ApiError } from '../services/api'
 
 const isDragOver = ref<boolean>(false)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const tasks = ref<ImportTask[]>([])
+const uploadError = ref('')
 let pollTimer: any = null
 
 onMounted(async () => {
@@ -163,8 +169,17 @@ const handleDrop = (e: DragEvent) => {
 }
 
 const uploadFiles = async (files: File[]) => {
-  await api.uploadFiles(files)
-  await fetchTasks()
+  uploadError.value = ''
+  try {
+    await api.uploadFiles(files)
+    await fetchTasks()
+  } catch (exc) {
+    if (exc instanceof ApiError && exc.status === 409) {
+      uploadError.value = exc.message
+      return
+    }
+    uploadError.value = exc instanceof Error ? exc.message : '上传失败'
+  }
 }
 
 const clearTasks = async () => {
@@ -463,6 +478,7 @@ const getLineClass = (curr: any, next: any) => {
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
 /* Failed Error Banner */
+.upload-error-banner,
 .task-error-banner {
   margin: 6px 0 0 0;
   padding: 8px 12px;

@@ -5,6 +5,7 @@ import ImportView from '../views/ImportView.vue'
 import VectorMgmtView from '../views/VectorMgmtView.vue'
 import HistoryMgmtView from '../views/HistoryMgmtView.vue'
 import LoginView from '../views/LoginView.vue'
+import SettingsView from '../views/SettingsView.vue'
 import { getAccessToken } from '../services/http'
 
 export const routes: Array<RouteRecordRaw> = [
@@ -42,6 +43,12 @@ export const routes: Array<RouteRecordRaw> = [
     name: 'History',
     component: HistoryMgmtView,
     meta: { title: '历史会话管理', requiresAuth: true }
+  },
+  {
+    path: '/settings',
+    name: 'Settings',
+    component: SettingsView,
+    meta: { title: '运行配置', requiresAuth: true }
   }
 ]
 
