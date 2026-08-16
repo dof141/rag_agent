@@ -12,6 +12,7 @@ from app.auth.dependencies import build_current_user_dependency
 from app.embedding.interface import EmbeddingConfigurationError
 from app.import_process.agent.state import get_default_state
 from app.import_process.errors import ImportTaskError
+from app.import_process.task_repository import TaskRepositoryError
 from app.runtime_settings.service import RuntimeSettingsConfigurationError
 from app.utils.task_utils import (
     add_done_task,
@@ -24,6 +25,7 @@ from app.utils.task_utils import (
     get_task_result,
     get_task_status,
     get_total_duration,
+    restore_task_from_snapshot,
     set_task_result,
     update_task_status,
 )
@@ -46,7 +48,7 @@ def create_import_router(services) -> APIRouter:
     ):
         try:
             snapshot = services.settings.get_snapshot(user.id)
-            runtime = services.runtime_factory(snapshot)
+            runtimes = [services.runtime_factory(snapshot) for _file in files]
         except (
             RuntimeSettingsConfigurationError,
             VectorStoreConfigurationError,
@@ -56,13 +58,11 @@ def create_import_router(services) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         date_based_root_dir = Path(services.output_root) / datetime.now().strftime("%Y%m%d")
-        task_ids = []
-        for file in files:
+        prepared_tasks = []
+        for file, runtime in zip(files, runtimes):
             filename = Path(file.filename or "upload.bin").name
             task_id = str(uuid.uuid4())
             document_id = build_document_id(user.id, filename)
-            task_ids.append(task_id)
-            add_running_task(task_id, "upload_file")
 
             task_local_dir = date_based_root_dir / task_id
             task_local_dir.mkdir(parents=True, exist_ok=True)
@@ -70,40 +70,78 @@ def create_import_router(services) -> APIRouter:
             with local_file_abs_path.open("wb") as output:
                 shutil.copyfileobj(file.file, output)
 
-            services.task_repository.upsert(
-                task_id,
+            try:
+                services.task_repository.upsert(
+                    task_id,
+                    {
+                        "file_name": filename,
+                        "local_dir": str(task_local_dir),
+                        "local_file_path": str(local_file_abs_path),
+                        "status": "pending",
+                        "user_id": user.id,
+                        "document_id": document_id,
+                        "settings_version": snapshot.version,
+                        "done_list": ["upload_file"],
+                        "running_list": [],
+                    },
+                )
+            except Exception as exc:
+                shutil.rmtree(task_local_dir, ignore_errors=True)
+                for prepared in prepared_tasks:
+                    try:
+                        services.task_repository.upsert(
+                            prepared["task_id"],
+                            {
+                                "status": "failed",
+                                "error": "任务创建失败",
+                                "failed_stage": "task_persistence",
+                            },
+                        )
+                    except Exception:
+                        pass
+                    shutil.rmtree(prepared["task_local_dir"], ignore_errors=True)
+                raise HTTPException(status_code=503, detail="任务状态服务不可用") from exc
+
+            prepared_tasks.append(
                 {
-                    "file_name": filename,
-                    "local_dir": str(task_local_dir),
-                    "local_file_path": str(local_file_abs_path),
-                    "status": "processing",
-                    "user_id": user.id,
+                    "task_id": task_id,
+                    "task_local_dir": task_local_dir,
+                    "local_file_abs_path": local_file_abs_path,
                     "document_id": document_id,
-                    "settings_version": snapshot.version,
-                },
+                    "runtime": runtime,
+                }
             )
-            add_done_task(task_id, "upload_file")
+
+        for prepared in prepared_tasks:
+            task_id = prepared["task_id"]
+            update_task_status(task_id, "processing", persist=False)
+            add_running_task(task_id, "upload_file", persist=False)
+            add_done_task(task_id, "upload_file", persist=False)
             background_tasks.add_task(
                 run_graph_task,
                 task_id,
-                str(task_local_dir),
-                str(local_file_abs_path),
+                str(prepared["task_local_dir"]),
+                str(prepared["local_file_abs_path"]),
                 user.id,
-                document_id,
-                runtime,
+                prepared["document_id"],
+                prepared["runtime"],
                 task_repository=services.task_repository,
             )
         return {
             "code": 200,
             "message": f"Files uploaded successfully, total: {len(files)}",
-            "task_ids": task_ids,
+            "task_ids": [prepared["task_id"] for prepared in prepared_tasks],
         }
 
     @router.get("/status/{task_id}")
     async def get_task_progress(task_id: str, user=Depends(current_user)):
-        task = services.task_repository.get(task_id)
+        try:
+            task = services.task_repository.get(task_id)
+        except TaskRepositoryError as exc:
+            raise HTTPException(status_code=503, detail="任务状态服务不可用") from exc
         if task is None or task.get("user_id") != user.id:
             raise HTTPException(status_code=404, detail="任务不存在")
+        restore_task_from_snapshot(task_id, task)
         return build_task_status_response(task_id)
 
     @router.post("/retry/{task_id}")
@@ -112,7 +150,10 @@ def create_import_router(services) -> APIRouter:
         background_tasks: BackgroundTasks,
         user=Depends(current_user),
     ):
-        task = services.task_repository.get(task_id)
+        try:
+            task = services.task_repository.get(task_id)
+        except TaskRepositoryError as exc:
+            raise HTTPException(status_code=503, detail="任务状态服务不可用") from exc
         if task is None or task.get("user_id") != user.id:
             raise HTTPException(status_code=404, detail="任务不存在")
         local_file_path = task.get("local_file_path")
@@ -121,9 +162,22 @@ def create_import_router(services) -> APIRouter:
             raise HTTPException(status_code=400, detail="本地源文件不存在，请重新上传文件进行导入")
         snapshot = services.settings.get_snapshot(user.id)
         runtime = services.runtime_factory(snapshot)
+        try:
+            services.task_repository.upsert(
+                task_id,
+                {
+                    "status": "pending",
+                    "error": "",
+                    "failed_stage": "",
+                    "settings_version": snapshot.version,
+                },
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="任务状态服务不可用") from exc
         clear_task(task_id)
-        add_running_task(task_id, "upload_file")
-        add_done_task(task_id, "upload_file")
+        update_task_status(task_id, "processing", persist=False)
+        add_running_task(task_id, "upload_file", persist=False)
+        add_done_task(task_id, "upload_file", persist=False)
         background_tasks.add_task(
             run_graph_task,
             task_id,
@@ -165,28 +219,42 @@ def run_graph_task(
         for event in graph_builder(runtime).stream(init_state):
             for node_name, _node_result in event.items():
                 add_done_task(task_id, node_name)
-        update_task_status(task_id, "completed")
+        update_task_status(task_id, "completed", persist=False)
         task_repository.upsert(task_id, {"status": "completed", "failed_stage": ""})
     except ImportTaskError as exc:
-        update_task_status(task_id, "failed")
-        set_task_result(task_id, "error", exc.public_message)
-        set_task_result(task_id, "failed_stage", exc.stage)
-        task_repository.upsert(
+        record_task_failure(
             task_id,
-            {
-                "status": "failed",
-                "error": exc.public_message,
-                "failed_stage": exc.stage,
-            },
+            error=exc.public_message,
+            failed_stage=exc.stage,
+            task_repository=task_repository,
+        )
+    except TaskRepositoryError:
+        record_task_failure(
+            task_id,
+            error="任务状态持久化失败",
+            failed_stage="task_persistence",
+            task_repository=task_repository,
         )
     except Exception:
-        update_task_status(task_id, "failed")
-        set_task_result(task_id, "error", "文档导入失败")
-        set_task_result(task_id, "failed_stage", "unknown")
+        record_task_failure(
+            task_id,
+            error="文档导入失败",
+            failed_stage="unknown",
+            task_repository=task_repository,
+        )
+
+
+def record_task_failure(task_id: str, *, error: str, failed_stage: str, task_repository) -> None:
+    update_task_status(task_id, "failed", persist=False)
+    set_task_result(task_id, "error", error, persist=False)
+    set_task_result(task_id, "failed_stage", failed_stage, persist=False)
+    try:
         task_repository.upsert(
             task_id,
-            {"status": "failed", "error": "文档导入失败", "failed_stage": "unknown"},
+            {"status": "failed", "error": error, "failed_stage": failed_stage},
         )
+    except Exception:
+        pass
 
 
 def build_task_status_response(task_id: str) -> dict:

@@ -6,6 +6,7 @@ from app.clients.mongo_history_utils import (
     mongo_get_task,
     mongo_clean_interrupted_tasks,
 )
+from app.import_process.task_repository import TaskRepositoryError
 
 # ---------------------------
 # 内存态任务追踪（单进程）
@@ -89,8 +90,10 @@ def _sync_to_mongo(task_id: str) -> None:
         "node_durations": _tasks_node_durations.get(task_id, {}),
         "total_duration": get_total_duration(task_id),
         "error": _tasks_result.get(task_id, {}).get("error", ""),
+        "failed_stage": _tasks_result.get(task_id, {}).get("failed_stage", ""),
     }
-    mongo_upsert_task(task_id, task_data)
+    if not mongo_upsert_task(task_id, task_data):
+        raise TaskRepositoryError("任务状态持久化失败")
 
 
 def _load_from_mongo_if_needed(task_id: str) -> None:
@@ -98,16 +101,25 @@ def _load_from_mongo_if_needed(task_id: str) -> None:
     if task_id not in _tasks_status:
         doc = mongo_get_task(task_id)
         if doc:
-            _ensure_task(task_id)
-            _tasks_status[task_id] = doc.get("status", "")
-            _tasks_done_list[task_id] = doc.get("done_list", [])
-            _tasks_running_list[task_id] = doc.get("running_list", [])
-            _tasks_node_durations[task_id] = doc.get("node_durations", {})
-            _tasks_result[task_id] = {"error": doc.get("error", "")}
-            total_dur = doc.get("total_duration", 0.0)
-            now = time.time()
-            _tasks_start_time[task_id] = now - total_dur
-            _tasks_end_time[task_id] = now
+            restore_task_from_snapshot(task_id, doc)
+
+
+def restore_task_from_snapshot(task_id: str, doc: Dict[str, Any]) -> None:
+    if task_id in _tasks_status:
+        return
+    _ensure_task(task_id)
+    _tasks_status[task_id] = doc.get("status", "")
+    _tasks_done_list[task_id] = doc.get("done_list", [])
+    _tasks_running_list[task_id] = doc.get("running_list", [])
+    _tasks_node_durations[task_id] = doc.get("node_durations", {})
+    _tasks_result[task_id] = {
+        "error": doc.get("error", ""),
+        "failed_stage": doc.get("failed_stage", ""),
+    }
+    total_dur = doc.get("total_duration", 0.0)
+    now = time.time()
+    _tasks_start_time[task_id] = now - total_dur
+    _tasks_end_time[task_id] = now
 
 
 def clean_interrupted_tasks_on_startup() -> int:
@@ -120,7 +132,13 @@ def _to_cn(node_name: str) -> str:
     return _NODE_NAME_TO_CN.get(node_name, node_name)
 
 
-def add_running_task(task_id: str, node_name: str, is_stream: bool = False) -> None:
+def add_running_task(
+    task_id: str,
+    node_name: str,
+    is_stream: bool = False,
+    *,
+    persist: bool = True,
+) -> None:
     """
     添加“正在运行”的节点任务。
 
@@ -139,13 +157,20 @@ def add_running_task(task_id: str, node_name: str, is_stream: bool = False) -> N
     if node_name not in _tasks_node_start_time[task_id]:
         _tasks_node_start_time[task_id][node_name] = now
 
-    _sync_to_mongo(task_id)
+    if persist:
+        _sync_to_mongo(task_id)
 
     if is_stream:
         task_push_queue(task_id)
 
 
-def add_done_task(task_id: str, node_name: str, is_stream: bool = False) -> None:
+def add_done_task(
+    task_id: str,
+    node_name: str,
+    is_stream: bool = False,
+    *,
+    persist: bool = True,
+) -> None:
     """
     添加“已完成”的节点任务。
 
@@ -172,19 +197,21 @@ def add_done_task(task_id: str, node_name: str, is_stream: bool = False) -> None
     duration = round(now - start_t, 2)
     _tasks_node_durations[task_id][node_name] = duration
 
-    _sync_to_mongo(task_id)
+    if persist:
+        _sync_to_mongo(task_id)
 
     if is_stream:
         task_push_queue(task_id)
 
 
-def set_task_result(task_id: str, key: str, value: str) -> None:
+def set_task_result(task_id: str, key: str, value: str, *, persist: bool = True) -> None:
     """
     存储任务结果字段（如 answer / error）。
     """
     _ensure_task(task_id)
     _tasks_result[task_id][key] = value
-    _sync_to_mongo(task_id)
+    if persist:
+        _sync_to_mongo(task_id)
 
 
 def get_task_result(task_id: str, key: str, default: str = "") -> str:
@@ -250,7 +277,13 @@ def get_total_duration(task_id: str) -> float:
     return round(end_t - start_t, 2)
 
 
-def update_task_status(task_id: str, status_name: str, push_queue: bool = False) -> None:
+def update_task_status(
+    task_id: str,
+    status_name: str,
+    push_queue: bool = False,
+    *,
+    persist: bool = True,
+) -> None:
     """
     更新任务状态。
 
@@ -261,7 +294,8 @@ def update_task_status(task_id: str, status_name: str, push_queue: bool = False)
     _tasks_status[task_id] = status_name
     if status_name in (TASK_STATUS_COMPLETED, TASK_STATUS_FAILED):
         _tasks_end_time[task_id] = time.time()
-    _sync_to_mongo(task_id)
+    if persist:
+        _sync_to_mongo(task_id)
     if push_queue:
         task_push_queue(task_id)
 

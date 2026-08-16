@@ -164,9 +164,7 @@ export const api = {
       }
       await parseJsonResponse(res)
     } catch (e) {
-      if (e instanceof ApiError) {
-        throw e
-      }
+      throw e instanceof Error ? e : new Error('上传失败')
     }
 
     return { task_ids: [] }

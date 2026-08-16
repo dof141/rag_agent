@@ -94,6 +94,14 @@ describe('settings api', () => {
       message: 'SiliconFlow + Qdrant 配置不完整',
     } satisfies Partial<ApiError>)
   })
+
+  it('上传网络异常不会被转换为空任务列表', async () => {
+    vi.mocked(authFetch).mockRejectedValue(new TypeError('network unavailable'))
+
+    await expect(
+      api.uploadFiles([new File(['hello'], 'hello.md')]),
+    ).rejects.toThrow('network unavailable')
+  })
 })
 
 describe('SettingsView', () => {

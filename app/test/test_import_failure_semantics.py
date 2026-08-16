@@ -3,14 +3,72 @@ import unittest
 from unittest.mock import patch
 
 from app.import_process.agent.nodes import node_item_name_recognition
+from app.import_process.agent import main_graph
 from app.import_process.errors import ImportTaskError
 from app.import_process.runtime import ImportRuntime
+from app.import_process.task_repository import TaskRepositoryError
 from app.import_process.agent.nodes.node_generate_embeddings import (
     create_generate_embeddings_node,
 )
 
 
 class ImportFailureSemanticsTest(unittest.TestCase):
+    def test_persistence_preflight_runs_before_node_side_effect(self):
+        side_effects = []
+
+        def write_vector(_state):
+            side_effects.append("vector-written")
+
+        def fail_persistence(_state):
+            raise TaskRepositoryError("database unavailable")
+
+        wrapped = main_graph.wrap_import_node(
+            write_vector,
+            stage="vector_store",
+            public_message="向量库写入失败",
+            before_node=fail_persistence,
+        )
+
+        with self.assertRaises(ImportTaskError) as raised:
+            wrapped({"task_id": "task-a"})
+
+        self.assertEqual(side_effects, [])
+        self.assertEqual(raised.exception.stage, "task_persistence")
+
+    def test_graph_node_failure_has_stable_public_stage(self):
+        def fail(_state):
+            raise RuntimeError("private parser details")
+
+        wrapped = main_graph.wrap_import_node(
+            fail,
+            stage="document_parse",
+            public_message="文档解析失败",
+        )
+
+        with self.assertRaises(ImportTaskError) as raised:
+            wrapped({})
+
+        self.assertEqual(raised.exception.stage, "document_parse")
+        self.assertEqual(raised.exception.public_message, "文档解析失败")
+        self.assertNotIn("private parser details", str(raised.exception))
+
+    def test_graph_node_preserves_existing_import_task_error(self):
+        expected = ImportTaskError("embedding", "文档向量生成失败")
+
+        def fail(_state):
+            raise expected
+
+        wrapped = main_graph.wrap_import_node(
+            fail,
+            stage="document_parse",
+            public_message="文档解析失败",
+        )
+
+        with self.assertRaises(ImportTaskError) as raised:
+            wrapped({})
+
+        self.assertIs(raised.exception, expected)
+
     def test_item_name_timeout_falls_back_to_file_stem(self):
         class FailingLlm:
             def invoke(self, messages):

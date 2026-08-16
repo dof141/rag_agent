@@ -210,7 +210,7 @@ def get_recent_messages(session_id: str, limit: int = 10) -> List[Dict[str, Any]
         return []
 
 
-def mongo_upsert_task(task_id: str, task_data: Dict[str, Any]) -> None:
+def mongo_upsert_task(task_id: str, task_data: Dict[str, Any]) -> bool:
     """同步/落盘任务状态与节点流转数据到 MongoDB"""
     try:
         mongo_tool = get_history_mongo_tool()
@@ -221,11 +221,17 @@ def mongo_upsert_task(task_id: str, task_data: Dict[str, Any]) -> None:
             {"$set": task_data},
             upsert=True
         )
+        return True
     except Exception as e:
         logger.error(f"[mongo_upsert_task] Failed to upsert task {task_id}: {e}")
+        return False
 
 
-def mongo_get_task(task_id: str) -> Optional[Dict[str, Any]]:
+def mongo_get_task(
+    task_id: str,
+    *,
+    raise_on_error: bool = False,
+) -> Optional[Dict[str, Any]]:
     """查询 MongoDB 中存储的任务记录"""
     try:
         mongo_tool = get_history_mongo_tool()
@@ -235,6 +241,8 @@ def mongo_get_task(task_id: str) -> Optional[Dict[str, Any]]:
         return doc
     except Exception as e:
         logger.error(f"[mongo_get_task] Failed to get task {task_id}: {e}")
+        if raise_on_error:
+            raise
         return None
 
 
@@ -247,6 +255,7 @@ def mongo_clean_interrupted_tasks() -> int:
             {"$set": {
                 "status": "failed",
                 "error": "服务重启，任务执行中断",
+                "failed_stage": "startup_recovery",
                 "updated_at": datetime.now()
             }}
         )
@@ -255,7 +264,7 @@ def mongo_clean_interrupted_tasks() -> int:
         return result.modified_count
     except Exception as e:
         logger.error(f"[mongo_clean_interrupted_tasks] Failed on startup clean: {e}")
-        return 0
+        raise
 
 # 主程序入口：仅当直接运行该脚本时执行，用于简单的功能测试
 if __name__ == "__main__":

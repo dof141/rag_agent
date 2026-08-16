@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.auth.repository import UserRepository
@@ -22,6 +22,7 @@ REQUIRED_CONFIG = (
     "RAG_JWT_TTL_SECONDS",
     "RAG_SETTINGS_MASTER_KEY",
 )
+ENV_CONFIG = REQUIRED_CONFIG + ("RAG_OUTPUT_ROOT",)
 
 
 class ApplicationConfigurationError(ValueError):
@@ -38,7 +39,7 @@ class ApplicationServices:
     runtime_factory: object
     output_root: Path
     admin_username: str
-    admin_password: str
+    admin_password: str = field(repr=False)
 
     def initialize_database_only(self) -> None:
         self.database.initialize()
@@ -84,4 +85,4 @@ def create_application_services(config: dict[str, str | None]) -> ApplicationSer
 
 
 def create_application_services_from_env() -> ApplicationServices:
-    return create_application_services({name: os.getenv(name) for name in REQUIRED_CONFIG})
+    return create_application_services({name: os.getenv(name) for name in ENV_CONFIG})
