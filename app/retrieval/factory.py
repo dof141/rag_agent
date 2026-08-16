@@ -28,6 +28,11 @@ def create_retrieval(
     else:
         raise RuntimeSettingsConfigurationError("查询运行配置缺失或组合不受支持")
 
+    if (
+        snapshot.embedding_config.dimension <= 0
+        or vector_config.dimension <= 0
+    ):
+        raise RuntimeSettingsConfigurationError("查询运行配置的向量维度必须为正数")
     if snapshot.embedding_config.dimension != vector_config.dimension:
         raise RuntimeSettingsConfigurationError("查询运行配置的向量维度不一致")
 

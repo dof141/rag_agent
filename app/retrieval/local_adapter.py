@@ -86,6 +86,8 @@ class RetrievalModule:
     ) -> RerankedDocuments:
         if not documents:
             return RerankedDocuments(documents=[])
+        if not query.strip():
+            raise ValueError("query cannot be empty")
 
         outcome = self._reranker(query, [document["text"] for document in documents])
         reranked_documents = []

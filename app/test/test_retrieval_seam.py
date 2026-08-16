@@ -392,6 +392,31 @@ class RetrievalSeamTest(unittest.TestCase):
         self.assertNotIn("score", docs[0])
         self.assertNotIn("score", docs[1])
 
+    def test_rerank_rejects_blank_query_before_calling_reranker(self):
+        from app.reranker.interface import RerankOutcome
+        from app.retrieval.local_adapter import RetrievalModule
+
+        docs = [{"text": "candidate", "meta": 1}]
+        for query in ("", "  \t"):
+            with self.subTest(query=query):
+                calls = []
+
+                def reranker(rerank_query, texts):
+                    calls.append((rerank_query, texts))
+                    return RerankOutcome(items=[])
+
+                retrieval = RetrievalModule(
+                    RecordingEmbedding({"dense": []}),
+                    RecordingVectorSearch(),
+                    reranker,
+                )
+
+                with self.assertRaisesRegex(ValueError, "query cannot be empty"):
+                    retrieval.rerank_documents(query, docs)
+
+                self.assertEqual(calls, [])
+                self.assertEqual(docs, [{"text": "candidate", "meta": 1}])
+
     def test_retrieval_preserves_reranker_degradation_metadata(self):
         from app.reranker.interface import RerankItem, RerankOutcome
         from app.retrieval.local_adapter import RetrievalModule
