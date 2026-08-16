@@ -1,6 +1,7 @@
 import os
 import uvicorn
 from pathlib import Path
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks, File, UploadFile, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -8,7 +9,12 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 # 引入项目现有的导入服务逻辑与查询服务逻辑
-from app.import_process.api.file_import_service import upload_file, get_task_progress
+from app.application_services import create_application_services_from_env
+from app.auth.dependencies import build_current_user_dependency
+from app.auth.router import create_auth_router
+from app.import_process.api.file_import_service import create_import_router
+from app.runtime_settings.router import create_settings_router
+from app.utils.task_utils import clean_interrupted_tasks_on_startup
 from app.query_process.api.query_server import (
     query, stream, get_task_history, clear_chat_history, confirm,
     QueryRequest, ConfirmRequest, mcp
@@ -30,13 +36,22 @@ class RAGServerManager:
     3. 自动托管打包后的 Vue 3 统一前端 SPA (frontend/dist)
     """
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 8000):
+    def __init__(self, host: str = "0.0.0.0", port: int = 8000, services=None):
         self.host = host
         self.port = port
+        self.services = services or create_application_services_from_env()
+
+        @asynccontextmanager
+        async def lifespan(app_instance: FastAPI):
+            self.services.initialize()
+            clean_interrupted_tasks_on_startup()
+            yield
+
         self.app = FastAPI(
             title="RAG Agent Unified System",
             description="整合智能问答、文档导入、向量库管理与历史记录的统一服务",
-            version="0.2.0"
+            version="0.2.0",
+            lifespan=lifespan,
         )
         self._setup_middleware()
         self._setup_routes()
@@ -64,10 +79,12 @@ class RAGServerManager:
             return {"status": "online", "code": 200}
 
         # -----------------------------
-        # 2. 文档导入 API (原 8001 服务)
+        # 2. 认证、设置与文档导入 API
         # -----------------------------
-        app.add_api_route("/upload", upload_file, methods=["POST"], summary="上传文件并触发导入图")
-        app.add_api_route("/status/{task_id}", get_task_progress, methods=["GET"], summary="任务进度轮询")
+        app.include_router(create_auth_router(self.services.users, self.services.tokens))
+        current_user = build_current_user_dependency(self.services.users, self.services.tokens)
+        app.include_router(create_settings_router(self.services.settings, current_user))
+        app.include_router(create_import_router(self.services))
 
         # -----------------------------
         # 3. 问答检索与断点确认 API (原 8002 服务)
