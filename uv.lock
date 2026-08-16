@@ -3901,6 +3901,7 @@ name = "rag-agent"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "datasets" },
     { name = "fastapi" },
     { name = "fastmcp" },
@@ -3935,6 +3936,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=49.0.0" },
     { name = "datasets", specifier = ">=5.0.0" },
     { name = "fastapi", specifier = ">=0.135.1" },
     { name = "fastmcp", specifier = ">=2.9.1" },
