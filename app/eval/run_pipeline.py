@@ -1,36 +1,32 @@
-"""
-离线跑查询图，收集 RAGAS 样本。
-
-用法（项目根目录）:
-  python -m app.eval.run_pipeline
-  python -m app.eval.run_pipeline --golden app/eval/golden_set.jsonl --out app/eval/reports/pipeline_outputs.jsonl
-"""
+"""通过正式的用户级问答运行时生成离线评测样本。"""
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import uuid
+from contextlib import aclosing
 from pathlib import Path
-from typing import Any
-from langgraph.types import Command
-from app.core.logger import logger
-from app.query_process.agent.main_graph import query_app
-from app.query_process.agent.state import create_query_default_state
-from app.utils.task_utils import get_task_result
+from typing import Any, Awaitable, Callable
 
-# app/eval/ 目录（本文件所在目录），与 CWD 无关
+from app.application_services import create_application_services_from_env
+from app.auth.models import User
+from app.core.logger import logger
+from app.query_process.engine import (
+    ConfirmRequest,
+    QueryEngine,
+    QueryEngineError,
+    QueryRequest,
+)
+
+
 EVAL_DIR = Path(__file__).resolve().parent
 DEFAULT_GOLDEN = EVAL_DIR / "golden_set.jsonl"
 DEFAULT_OUT = EVAL_DIR / "reports" / "pipeline_outputs.jsonl"
+TERMINAL_EVENTS = {"final", "confirmation_required", "error"}
 
 
 def resolve_path(path: str | Path) -> Path:
-    """
-    解析路径，不依赖当前工作目录：
-    - 绝对路径：原样返回
-    - 相对路径：相对 app/eval/ 解析
-    - 兼容从项目根写的 app/eval/...
-    """
     p = Path(path)
     if p.is_absolute():
         return p
@@ -40,171 +36,278 @@ def resolve_path(path: str | Path) -> Path:
     return (EVAL_DIR / p).resolve()
 
 
-def _docs_to_contexts(reranked_docs: list[dict] | None) -> list[str]:
-    if not reranked_docs:
-        return []
+def _contexts_from_sources(sources: Any, max_contexts: int) -> list[str]:
     contexts: list[str] = []
-    for doc in reranked_docs:
-        text = (doc or {}).get("text") or ""
-        text = text.strip()
+    for source in sources or []:
+        if not isinstance(source, dict):
+            continue
+        text = str(source.get("content") or source.get("text") or "").strip()
         if text:
             contexts.append(text)
+        if len(contexts) >= max_contexts:
+            break
     return contexts
 
 
-def run_one(question: str, *, max_contexts: int = 10) -> dict[str, Any]:
-    session_id = f"eval-{uuid.uuid4().hex[:12]}"
-    request_id = str(uuid.uuid4())
-
-    state = create_query_default_state(
-        session_id=session_id,
-        request_id=request_id,
-        original_query=question,
-        is_stream=False,
-    )
-    config = {"configurable": {"thread_id": session_id}}
-
-    rewritten_query = question
-    item_names: list[str] = []
-    contexts: list[str] = []
-    answer = ""
-    status = "ok"
-    error = ""
-
-    try:
-        # 第一阶段：正常流式运行图
-        for event in query_app.stream(state, config, stream_mode="updates"):
-            # 兼容判断 interrupt
-            if isinstance(event, dict) and "__interrupt__" in event:
-                status = "awaiting_confirmation"
+async def _consume_events(
+    engine: QueryEngine,
+    user: User,
+    request_id: str,
+    *,
+    max_contexts: int,
+) -> dict[str, Any]:
+    answer_parts: list[str] = []
+    warnings: list[dict[str, Any]] = []
+    terminal: dict[str, Any] | None = None
+    events = await engine.events(user, request_id)
+    async with aclosing(events):
+        async for event in events:
+            if event.type == "delta":
+                answer_parts.append(str(event.data.get("delta") or ""))
+            elif event.type == "warning":
+                warnings.append(dict(event.data))
+            if event.type in TERMINAL_EVENTS:
+                terminal = {"type": event.type, "data": dict(event.data)}
                 break
-            if not isinstance(event, dict):
-                continue
 
-            for node_name, update in event.items():
-                if node_name == "__interrupt__":
-                    status = "awaiting_confirmation"
-                    break
-                if not isinstance(update, dict):
-                    continue
+    if terminal is None:
+        return {
+            "type": "error",
+            "data": {
+                "code": "evaluation_stream_incomplete",
+                "message": "问答流未返回终态",
+                "retryable": True,
+            },
+            "answer": "".join(answer_parts),
+            "warnings": warnings,
+            "contexts": [],
+        }
 
-                if update.get("rewritten_query"):
-                    rewritten_query = update["rewritten_query"]
-                if update.get("item_names") is not None:
-                    item_names = list(update.get("item_names") or [])
-                if update.get("reranked_docs"):
-                    contexts = _docs_to_contexts(update["reranked_docs"])[:max_contexts]
-                if update.get("answer"):
-                    answer = update["answer"]
+    data = terminal["data"]
+    terminal["answer"] = str(data.get("answer") or "".join(answer_parts))
+    terminal["warnings"] = list(data.get("warnings") or warnings)
+    terminal["contexts"] = _contexts_from_sources(data.get("sources"), max_contexts)
+    return terminal
 
-        # -------------------------------------------------------------
-        # 🔑 关键修复：如果中断等待商品确认，评估模式下自动选择匹配到的候选商品继续执行
-        # -------------------------------------------------------------
-        if status == "awaiting_confirmation":
-            # 恢复图执行（传入 resume 信号，选择默认候选商品）
-            # 假设你的节点在 resume 时接受选中的商品名称或第一个候选
-            resume_input = Command(resume={"candidate_id": item_names[0] if item_names else "华为擎云B530"})
 
-            # 重新流式执行剩余节点
-            for event in query_app.stream(resume_input, config, stream_mode="updates"):
-                if not isinstance(event, dict):
-                    continue
-                for node_name, update in event.items():
-                    if not isinstance(update, dict):
-                        continue
-                    if update.get("reranked_docs"):
-                        contexts = _docs_to_contexts(update["reranked_docs"])[:max_contexts]
-                    if update.get("answer"):
-                        answer = update["answer"]
-
-            # 恢复成功后将状态改回 ok
-            status = "ok"
-
-        # 获取最终答案
-        task_answer = get_task_result(request_id, "answer", default="")
-        if task_answer:
-            answer = task_answer
-
-        if not answer and status == "ok":
-            status = "empty_answer"
-            error = "answer is empty after pipeline"
-
-    except Exception as e:
-        status = "error"
-        error = str(e)
-        logger.exception(f"[eval] run_one failed: {question}")
-
+def _failed_sample(
+    question: str,
+    *,
+    session_id: str,
+    request_id: str = "",
+    code: str = "evaluation_internal_error",
+    message: str = "评测样本执行失败",
+) -> dict[str, Any]:
     return {
-        "user_input": rewritten_query or question,
-        "retrieved_contexts": contexts,
-        "response": answer or "",
+        "user_input": question,
+        "retrieved_contexts": [],
+        "response": "",
         "meta": {
             "original_query": question,
-            "rewritten_query": rewritten_query,
-            "item_names": item_names,
             "session_id": session_id,
             "request_id": request_id,
-            "status": status,
-            "error": error,
-            "num_contexts": len(contexts),
+            "status": "failure",
+            "error_code": code,
+            "error": message,
+            "num_contexts": 0,
+            "warnings": [],
         },
     }
 
 
-def build_dataset(golden_path: Path, out_path: Path, max_contexts: int = 10) -> list[dict]:
-    rows: list[dict] = []
-    golden_lines = golden_path.read_text(encoding="utf-8").splitlines()
+async def run_one(
+    question: str,
+    *,
+    engine: QueryEngine,
+    user: User,
+    session_id: str | None = None,
+    max_contexts: int = 10,
+) -> dict[str, Any]:
+    """执行一条样本；失败也返回结构化结果，不丢弃样本。"""
+    session_id = session_id or f"eval-{uuid.uuid4().hex[:12]}"
+    request_id = ""
+    selected_candidate_id = ""
+    try:
+        response = await engine.ask(
+            user,
+            QueryRequest(query=question, session_id=session_id, is_stream=True),
+        )
+        request_id = response.request_id
+        terminal = await _consume_events(
+            engine, user, request_id, max_contexts=max_contexts
+        )
 
+        if terminal["type"] == "confirmation_required":
+            candidates = terminal["data"].get("candidates") or []
+            if not candidates:
+                return _failed_sample(
+                    question,
+                    session_id=session_id,
+                    request_id=request_id,
+                    code="evaluation_candidates_missing",
+                    message="问答流程要求确认，但没有返回候选项",
+                )
+            selected_candidate_id = str(candidates[0]["id"])
+            resumed = await engine.confirm(
+                user,
+                ConfirmRequest(
+                    session_id=session_id,
+                    pending_request_id=request_id,
+                    candidate_id=selected_candidate_id,
+                ),
+            )
+            request_id = resumed.request_id
+            terminal = await _consume_events(
+                engine, user, request_id, max_contexts=max_contexts
+            )
+
+        if terminal["type"] == "error":
+            data = terminal["data"]
+            return _failed_sample(
+                question,
+                session_id=session_id,
+                request_id=request_id,
+                code=str(data.get("code") or "query_failed"),
+                message=str(data.get("message") or "问答流程执行失败"),
+            )
+
+        contexts = terminal["contexts"]
+        answer = terminal["answer"]
+        status = "success" if contexts else "empty_evidence"
+        return {
+            "user_input": question,
+            "retrieved_contexts": contexts,
+            "response": answer,
+            "meta": {
+                "original_query": question,
+                "session_id": session_id,
+                "request_id": request_id,
+                "status": status,
+                "error_code": "",
+                "error": "",
+                "num_contexts": len(contexts),
+                "selected_candidate_id": selected_candidate_id,
+                "warnings": terminal["warnings"],
+            },
+        }
+    except QueryEngineError as exc:
+        return _failed_sample(
+            question,
+            session_id=session_id,
+            request_id=request_id,
+            code=exc.error.code,
+            message=exc.error.message,
+        )
+    except Exception:
+        logger.exception("[eval] run_one failed: {}", question)
+        return _failed_sample(
+            question,
+            session_id=session_id,
+            request_id=request_id,
+        )
+
+
+def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, int | float]:
+    counts = {"success": 0, "failure": 0, "empty_evidence": 0}
+    for sample in samples:
+        status = (sample.get("meta") or {}).get("status")
+        if status not in counts:
+            status = "failure"
+        counts[status] += 1
+    total = len(samples)
+    return {
+        "total": total,
+        **counts,
+        "success_rate": counts["success"] / total if total else 0.0,
+        "failure_rate": counts["failure"] / total if total else 0.0,
+        "empty_evidence_rate": counts["empty_evidence"] / total if total else 0.0,
+    }
+
+
+async def build_dataset(
+    golden_path: Path,
+    out_path: Path,
+    *,
+    engine: QueryEngine,
+    user: User,
+    max_contexts: int = 10,
+    runner: Callable[..., Awaitable[dict[str, Any]]] = run_one,
+) -> tuple[list[dict[str, Any]], dict[str, int | float]]:
+    rows: list[dict[str, Any]] = []
     out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # 打开文件句柄，每处理完一条立刻写入磁盘并 flush
-    with out_path.open("w", encoding="utf-8") as f:
-        for i, line in enumerate(golden_lines, start=1):
-            line = line.strip()
-            if not line:
+    with out_path.open("w", encoding="utf-8") as output:
+        for index, line in enumerate(
+            golden_path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if not line.strip():
                 continue
             gold = json.loads(line)
-            question = gold["question"]
-            logger.info(f"[eval] ({i}) running: {question}")
-
+            question = str(gold["question"])
+            conversation_id = str(
+                gold.get("conversation_id") or f"sample-{index}"
+            )
+            session_id = f"eval:{conversation_id}"
             try:
-                sample = run_one(question, max_contexts=max_contexts)
-            except Exception as e:
-                logger.error(f"[eval] ({i}) 样本运行严重崩溃: {e}")
-                continue
+                sample = await runner(
+                    question,
+                    engine=engine,
+                    user=user,
+                    session_id=session_id,
+                    max_contexts=max_contexts,
+                )
+            except Exception:
+                logger.exception("[eval] sample runner crashed: {}", question)
+                sample = _failed_sample(question, session_id=session_id)
 
             sample["reference"] = gold.get("ground_truth", "")
             sample["meta"]["expected_item_names"] = gold.get("item_names", [])
+            sample["meta"]["topic"] = gold.get("topic", "")
+            sample["meta"]["turn"] = gold.get("turn")
             rows.append(sample)
+            output.write(json.dumps(sample, ensure_ascii=False) + "\n")
+            output.flush()
 
-            # 边跑边存
-            f.write(json.dumps(sample, ensure_ascii=False) + "\n")
-            f.flush()
+    summary = summarize_samples(rows)
+    out_path.with_suffix(".summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    logger.info("[eval] wrote {} samples -> {}", len(rows), out_path)
+    logger.info("[eval] summary={}", summary)
+    return rows, summary
 
-            logger.info(
-                f"[eval] ({i}) status={sample['meta']['status']} "
-                f"contexts={sample['meta']['num_contexts']} "
-                f"answer_len={len(sample.get('response') or '')}"
-            )
 
-    logger.info(f"[eval] wrote {len(rows)} samples -> {out_path}")
-    return rows
-
-def main():
-    parser = argparse.ArgumentParser(description="Run query pipeline for RAGAS dataset")
-    parser.add_argument("--golden", default=str(DEFAULT_GOLDEN), help="金标 jsonl 路径")
-    parser.add_argument("--out", default=str(DEFAULT_OUT), help="pipeline 输出 jsonl 路径")
-    parser.add_argument("--max-contexts", type=int, default=10)
-    args = parser.parse_args()
-
+async def _async_main(args) -> None:
     golden_path = resolve_path(args.golden)
     out_path = resolve_path(args.out)
-    logger.info(f"[eval] golden={golden_path}")
-    logger.info(f"[eval] out={out_path}")
     if not golden_path.exists():
         raise FileNotFoundError(f"金标文件不存在: {golden_path}")
 
-    build_dataset(golden_path, out_path, max_contexts=args.max_contexts)
+    services = create_application_services_from_env()
+    services.initialize_database_only()
+    user = services.users.get_by_id(args.user_id)
+    if user is None:
+        raise SystemExit(f"评测用户不存在: {args.user_id}")
+
+    engine = QueryEngine(services)
+    try:
+        await build_dataset(
+            golden_path,
+            out_path,
+            engine=engine,
+            user=user,
+            max_contexts=args.max_contexts,
+        )
+    finally:
+        await engine.close()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run user-scoped query pipeline")
+    parser.add_argument("--user-id", required=True, help="使用该用户的冻结问答配置")
+    parser.add_argument("--golden", default=str(DEFAULT_GOLDEN))
+    parser.add_argument("--out", default=str(DEFAULT_OUT))
+    parser.add_argument("--max-contexts", type=int, default=10)
+    asyncio.run(_async_main(parser.parse_args()))
 
 
 if __name__ == "__main__":

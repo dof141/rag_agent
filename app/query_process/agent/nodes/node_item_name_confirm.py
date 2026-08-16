@@ -169,11 +169,14 @@ def _node_item_name_confirm(state: QueryGraphState, retrieval):
     logger.info(f"---node_item_name_confirm---开始处理")
     # 记录任务开始
     add_running_task(state["request_id"], sys._getframe().f_code.co_name,state["is_stream"])
+    user_id = state.get("user_id")
+    if not user_id:
+        raise ValueError("user_id is required for history access")
     #获取到session id
     session_id = state["session_id"]
     logger.info(f"当前会话session_id: {session_id}")
     #获取到历史聊天记录
-    history_chats = get_recent_messages(session_id,limit=10)
+    history_chats = get_recent_messages(user_id, session_id, limit=10)
     serializable_history = []
     for item in history_chats:
         item_copy = dict(item)
@@ -217,7 +220,8 @@ def _node_item_name_confirm(state: QueryGraphState, retrieval):
         #将 返回的结果进行区分 确认 执行流程
     state = step_6_deal_list(state,item_results,history_chats,rewritten_query)
     #保存本次提问
-    save_chat_message(session_id=session_id,
+    save_chat_message(user_id=user_id,
+                      session_id=session_id,
                       role='user',
                       text=state['original_query'],
                       rewritten_query=state.get('rewritten_query', ""),

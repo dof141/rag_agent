@@ -36,6 +36,7 @@ class QueryWarningFlowTest(unittest.TestCase):
 
         state = {
             "request_id": "req-1",
+            "user_id": "user-1",
             "session_id": "session-1",
             "is_stream": True,
             "original_query": "question",
@@ -75,6 +76,7 @@ class QueryWarningFlowTest(unittest.TestCase):
         from app.query_process.agent.nodes import node_answer_output
 
         state = {
+            "user_id": "user-1",
             "session_id": "session-1",
             "answer": "answer",
             "warnings": [dict(WARNING)],
@@ -84,6 +86,7 @@ class QueryWarningFlowTest(unittest.TestCase):
             node_answer_output.step_5_write_history(state)
 
         self.assertEqual(save.call_args.kwargs["warnings"], [WARNING])
+        self.assertEqual(save.call_args.kwargs["user_id"], "user-1")
 
     def test_mongo_document_stores_warnings(self):
         from app.clients import mongo_history_utils_new
@@ -102,6 +105,7 @@ class QueryWarningFlowTest(unittest.TestCase):
             return_value=mongo_tool,
         ):
             mongo_history_utils_new.save_chat_message(
+                user_id="user-1",
                 session_id="session-1",
                 role="assistant",
                 text="answer",
@@ -109,6 +113,7 @@ class QueryWarningFlowTest(unittest.TestCase):
             )
 
         self.assertEqual(inserted[0]["warnings"], [WARNING])
+        self.assertEqual(inserted[0]["user_id"], "user-1")
 
     def test_mongo_modules_do_not_connect_at_import_time(self):
         module_names = [
@@ -129,13 +134,10 @@ class QueryWarningFlowTest(unittest.TestCase):
                         sys.modules[module_name] = previous
 
     def test_history_serializer_preserves_warnings_and_defaults_old_records(self):
-        from app.query_process.agent import main_graph
-
         module_name = "app.query_process.api.query_server"
         previous = sys.modules.pop(module_name, None)
         try:
-            with patch.object(main_graph, "query_app", object(), create=True):
-                query_server = importlib.import_module(module_name)
+            query_server = importlib.import_module(module_name)
 
             current = query_server._serialize_history_record(
                 {

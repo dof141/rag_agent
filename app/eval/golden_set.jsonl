@@ -1,5 +1,12 @@
-{"question": "华为擎云B530的机箱尺寸是多少？", "ground_truth": "高度约293mm，宽度约93mm，深度约315.5mm", "item_names": ["华为擎云B530"]}
-{"question": "华为擎云B530支持哪些视频输出接口？", "ground_truth": "支持HDMI和DP（DisplayPort）接口，具体数量因型号而异", "item_names": ["华为擎云B530"]}
-{"question": "华为擎云B530最高可搭载什么处理器？", "ground_truth": "最高搭载第12代英特尔酷睿i7-12700处理器", "item_names": ["华为擎云B530"]}
-{"question": "华为擎云B530的机箱大约有多大体积？", "ground_truth": "采用约8L小机箱设计，体积约为传统台式机的三分之一", "item_names": ["华为擎云B530"]}
-{"question": "华为擎云B530如何通过电脑管家查看玩机技巧？", "ground_truth": "点击桌面底部任务栏上的华为电脑管家，再进入玩机技巧", "item_names": ["华为擎云B530"]}
+{"question":"华为擎云B530的机箱尺寸是多少？","ground_truth":"高度约293mm，宽度约93mm，深度约315.5mm。","item_names":["华为擎云B530"],"topic":"设备规格","conversation_id":"b530-spec","turn":1}
+{"question":"它大约有多大体积？","ground_truth":"采用约8L小机箱设计，体积约为传统台式机的三分之一。","item_names":["华为擎云B530"],"topic":"设备规格","conversation_id":"b530-spec","turn":2}
+{"question":"最高可搭载什么处理器？","ground_truth":"最高搭载第12代英特尔酷睿i7-12700处理器。","item_names":["华为擎云B530"],"topic":"设备规格","conversation_id":"b530-spec","turn":3}
+{"question":"华为擎云B530支持哪些视频输出接口？","ground_truth":"支持HDMI和DP（DisplayPort）接口，具体数量因型号而异。","item_names":["华为擎云B530"],"topic":"设备接口","conversation_id":"b530-ports","turn":1}
+{"question":"如何通过电脑管家查看玩机技巧？","ground_truth":"点击桌面底部任务栏上的华为电脑管家，再进入玩机技巧。","item_names":["华为擎云B530"],"topic":"设备使用","conversation_id":"b530-guide","turn":1}
+{"question":"一元二次方程的判别式是什么？","ground_truth":"对于ax²+bx+c=0，判别式为Δ=b²-4ac。","item_names":["一元二次方程"],"topic":"代数","conversation_id":"quadratic","turn":1}
+{"question":"判别式大于零时有几个实数根？","ground_truth":"判别式大于零时有两个不相等的实数根。","item_names":["一元二次方程"],"topic":"代数","conversation_id":"quadratic","turn":2}
+{"question":"判别式等于零呢？","ground_truth":"判别式等于零时有两个相等的实数根，也可称为一个二重实根。","item_names":["一元二次方程"],"topic":"代数","conversation_id":"quadratic","turn":3}
+{"question":"Python装饰器的主要作用是什么？","ground_truth":"装饰器在不修改原函数主体的情况下包装函数或类，以增加日志、鉴权、缓存等行为。","item_names":["Python装饰器"],"topic":"Python","conversation_id":"python-decorator","turn":1}
+{"question":"多个装饰器的执行顺序是什么？","ground_truth":"装饰阶段从下到上应用，调用时由最外层装饰器开始进入。","item_names":["Python装饰器"],"topic":"Python","conversation_id":"python-decorator","turn":2}
+{"question":"RRF融合为什么可以合并不同检索路线？","ground_truth":"RRF基于各路线中的排名位置累计倒数排名分数，不要求不同路线的原始分数处于同一量纲。","item_names":["RRF融合"],"topic":"信息检索","conversation_id":"rag-retrieval","turn":1}
+{"question":"没有检索到知识库依据时系统应如何回答？","ground_truth":"系统应明确说明知识库中没有足够依据，不应调用模型编造答案或生成虚假来源。","item_names":["RAG问答"],"topic":"信息检索","conversation_id":"rag-retrieval","turn":2}

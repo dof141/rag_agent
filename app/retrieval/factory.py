@@ -44,7 +44,3 @@ def create_retrieval(
         reranker,
         expected_dimension=vector_config.dimension,
     )
-
-
-def get_retrieval() -> Retrieval:
-    raise RuntimeSettingsConfigurationError("查询运行时尚未注入")

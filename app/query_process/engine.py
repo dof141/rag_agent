@@ -158,6 +158,7 @@ class QueryEngine:
         self._requests[request_id] = record
         graph_input = create_query_default_state(
             request_id=request_id,
+            user_id=user.id,
             session_id=session_id,
             original_query=request.query,
             is_stream=request.is_stream,
@@ -190,7 +191,7 @@ class QueryEngine:
         self._requests[request_id] = record
         command = Command(
             resume=request.candidate_id,
-            update={"request_id": request_id, "is_stream": True},
+            update={"request_id": request_id, "user_id": user.id, "is_stream": True},
         )
         self._remove_record(pending.request_id, cancel_task=False)
         self._start(record, self._run_background(record, command))

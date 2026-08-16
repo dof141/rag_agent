@@ -8,6 +8,7 @@ class QueryGraphState(TypedDict):
     """
 
     request_id: str
+    user_id: str  # 当前认证用户唯一标识
     candidate_items: list[dict]
     awaiting_confirmation: bool
     session_id: str  # 会话唯一标识
@@ -38,6 +39,7 @@ class QueryGraphState(TypedDict):
 # 默认状态（全部为空）
 # ========================
 query_graph_default_state: QueryGraphState = {
+    "user_id": "",
     "session_id": "",
     "original_query": "",
     "embedding_chunks": [],

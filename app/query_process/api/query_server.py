@@ -34,14 +34,14 @@ def _serialize_history_record(record: dict) -> dict:
     }
 
 
-def get_task_history(session_id: str, limit: int = 10):
-    records = get_recent_messages(session_id, limit=limit)
+def get_task_history(user_id: str, session_id: str, limit: int = 10):
+    records = get_recent_messages(user_id, session_id, limit=limit)
     return {
         "session_id": session_id,
         "items": [_serialize_history_record(record) for record in records],
     }
 
 
-def clear_chat_history(session_id: str):
-    count = clear_history(session_id)
+def clear_chat_history(user_id: str, session_id: str):
+    count = clear_history(user_id, session_id)
     return {"message": "History cleared", "deleted_count": count}

@@ -72,6 +72,7 @@ class QueryGraphRuntimeTest(unittest.TestCase):
 
         base_state = create_query_default_state(
             request_id="req-1",
+            user_id="user-a",
             session_id="session-1",
             original_query="question",
             rewritten_query="rewritten question",
@@ -184,6 +185,7 @@ class QueryGraphRuntimeTest(unittest.TestCase):
             with self.subTest(is_stream=is_stream):
                 state = create_query_default_state(
                     request_id="req-1",
+                    user_id="user-a",
                     session_id="session-1",
                     original_query="question",
                     rewritten_query="rewritten question",

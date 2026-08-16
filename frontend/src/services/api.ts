@@ -2,21 +2,19 @@ import type {
   KBItem,
   KBChunk,
   ChatSession,
-  ChatMessage,
   ImportTask,
   SystemStats,
   CandidateItem,
   RuntimeSettingsResponse,
   RuntimeSettingsUpdate,
 } from '../types'
-import { mockStats, mockKBItems, mockKBChunks, mockSessions } from '../mock/mockData'
+import { mockStats, mockKBItems, mockKBChunks } from '../mock/mockData'
 import { authFetch } from './http'
 
 const API_BASE = ''
 
 let localKBItems = [...mockKBItems]
 let localKBChunks = { ...mockKBChunks }
-let localSessions = [...mockSessions]
 let localStats = { ...mockStats }
 
 const PIPELINE_NODES_CONFIG = [
@@ -76,7 +74,11 @@ export class ApiError extends Error {
 async function parseJsonResponse<T>(response: Response): Promise<T> {
   const data = await response.json().catch(() => null)
   if (!response.ok) {
-    const message = typeof data?.detail === 'string' ? data.detail : `请求失败：${response.status}`
+    const message = typeof data?.message === 'string'
+      ? data.message
+      : typeof data?.detail === 'string'
+        ? data.detail
+        : `请求失败：${response.status}`
     throw new ApiError(response.status, message)
   }
   return data as T
@@ -123,7 +125,6 @@ export const api = {
     }
     localStats.total_items = localKBItems.length
     localStats.total_chunks = Object.values(localKBChunks).reduce((acc, cur) => acc + cur.length, 0)
-    localStats.total_sessions = localSessions.length
     return localStats
   },
 
@@ -300,111 +301,45 @@ export const api = {
   async sendQuery(query: string, sessionId?: string, isStream: boolean = true): Promise<{
     session_id: string
     request_id: string
+    status: 'processing' | 'final' | 'confirmation_required' | 'error'
     answer?: string
     awaiting_confirmation?: boolean
     candidates?: CandidateItem[]
   }> {
     const sid = sessionId || `sess-${Date.now()}`
-    try {
-      const res = await fetch(`${API_BASE}/query`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, session_id: sid, is_stream: isStream })
-      })
-
-      if (res.ok) {
-        const data = await res.json()
-        
-        if (data.awaiting_confirmation || data.status === 'waiting_confirmation') {
-          return {
-            session_id: data.session_id || sid,
-            request_id: data.request_id || `req-${Date.now()}`,
-            awaiting_confirmation: true,
-            candidates: data.candidate_items || data.candidates || []
-          }
-        }
-
-        const answerText = data.answer || '问答生成完毕。'
-
-        return {
-          session_id: data.session_id || sid,
-          request_id: data.request_id || `req-${Date.now()}`,
-          answer: answerText
-        }
-      }
-    } catch (e) {
-      console.warn('真实问答接口未连通，切换至仿真模式', e)
-    }
-
-    const reqId = `req-${Date.now()}`
-    const lowerQ = query.toLowerCase()
-
-    if (lowerQ.includes('neo4j') || (lowerQ.includes('路由器') && !lowerQ.includes('er2100') && !lowerQ.includes('ner214w'))) {
-      return {
-        session_id: sid,
-        request_id: reqId,
-        awaiting_confirmation: true,
-        candidates: [
-          { id: 'Neo4j 5.26（LTS）', item_name: 'Neo4j 5.26（LTS）', file_title: 'Neo4j 官方安装部署指南.pdf', score: 0.797 },
-          { id: 'H3C ER2100', item_name: 'H3C ER2100', file_title: 'H3C ER2100企业级路由器.pdf', score: 0.82 }
-        ]
-      }
-    }
-
-    let mockAnswer = `针对您关于 **${query}** 的提问，根据已导入的设备知识库匹配分析：\n\n1. **设备性能与配置**：建议查阅对应的设备操作手册。\n2. **安全防护**：请在断电状态下拆卸并检查接地线。\n3. **常见排错**：确认面板指示灯状态为常绿。\n\n![设备外观示意图](http://127.0.0.1:9000/knowledge-base-files/images/hak180/panel_diag.jpg)`
-    let itemTag = '通用设备'
-
-    if (lowerQ.includes('hak') || lowerQ.includes('烫金')) {
-      itemTag = 'hak180'
-      mockAnswer = `针对 **HAK 180 烫金机** 的局部烫印设置要求（顶部 50 mm – 170 mm）：\n\n1. 按面板 **[Mode]** 键进入参数设定；\n2. 将 **"Top Offset"** 设为 **50mm**；\n3. 将 **"Print Length"** 设为 **120mm**（即 170mm - 50mm）；\n4. 按 **[OK]** 保存即可生效。\n\n![HAK180操作面板架构](http://127.0.0.1:9000/knowledge-base-files/images/hak180/panel_diag.jpg)`
-    } else if (lowerQ.includes('万用表') || lowerQ.includes('电池')) {
-      itemTag = '万用表RS-12'
-      mockAnswer = `**万用表 RS-12 电池更换规范**：\n\n1. 关闭电源开关，拔出红黑测试表笔；\n2. 拧开后盖板上 2 颗固定螺丝；\n3. 更换 9V 叠层电池，注意正负极指向；\n4. 合上盖板并拧紧螺丝。`
-    }
-
-    this._saveToLocalSession(sid, query, mockAnswer, [itemTag])
-
+    const response = await authFetch(`${API_BASE}/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, session_id: sid, is_stream: isStream }),
+    })
+    const data = await parseJsonResponse<any>(response)
     return {
-      session_id: sid,
-      request_id: reqId,
-      answer: mockAnswer
+      session_id: data.session_id,
+      request_id: data.request_id,
+      status: data.status,
+      answer: data.answer || undefined,
+      awaiting_confirmation: data.status === 'confirmation_required',
+      candidates: data.candidates || [],
     }
   },
 
-  _saveToLocalSession(sid: string, query: string, answer: string, itemNames: string[]) {
-    let targetSession = localSessions.find(s => s.session_id === sid)
-    const userMsg: ChatMessage = { id: `m-${Date.now()}-u`, role: 'user', text: query, timestamp: Date.now() / 1000 }
-    const assistMsg: ChatMessage = {
-      id: `m-${Date.now()}-a`,
-      role: 'assistant',
-      text: answer,
-      item_names: itemNames,
-      timestamp: (Date.now() + 500) / 1000,
-      sources: [
-        { chunk_id: 101, title: '设备操作指导书', content: '参照标准流程...', score: 0.92, source: 'local' }
-      ]
-    }
-
-    if (!targetSession) {
-      targetSession = {
-        session_id: sid,
-        title: query.slice(0, 16) + '...',
-        last_message: answer.slice(0, 40),
-        last_role: 'assistant',
-        last_ts: Date.now() / 1000,
-        message_count: 2,
-        item_names: itemNames,
-        messages: [userMsg, assistMsg]
-      }
-      localSessions.unshift(targetSession)
-    } else {
-      if (!targetSession.messages) targetSession.messages = []
-      targetSession.messages.push(userMsg, assistMsg)
-      targetSession.last_message = answer.slice(0, 40)
-      targetSession.last_role = 'assistant'
-      targetSession.last_ts = Date.now() / 1000
-      targetSession.message_count = targetSession.messages.length
-    }
+  async confirmQuery(sessionId: string, pendingRequestId: string, candidateId: string): Promise<{
+    session_id: string
+    request_id: string
+    status: 'processing' | 'final' | 'confirmation_required' | 'error'
+    answer?: string
+    candidates?: CandidateItem[]
+  }> {
+    const response = await authFetch(`${API_BASE}/query/confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        pending_request_id: pendingRequestId,
+        candidate_id: candidateId,
+      }),
+    })
+    return parseJsonResponse(response)
   },
 
   // === 向量库管理 API ===
@@ -481,72 +416,47 @@ export const api = {
 
   // === 历史记录 API ===
   async getSessions(): Promise<ChatSession[]> {
-    try {
-      const res = await fetch(`${API_BASE}/api/history/sessions`)
-      if (res.ok) {
-        const data = await res.json()
-        if (data && data.data) return data.data
-      }
-    } catch {
-      // 忽略
-    }
-    return localSessions
+    const response = await authFetch(`${API_BASE}/api/history/sessions`)
+    const data = await parseJsonResponse<{ data?: ChatSession[] }>(response)
+    return data.data || []
   },
 
   async getSessionDetail(sessionId: string): Promise<ChatSession | null> {
-    try {
-      const res = await fetch(`${API_BASE}/history/${sessionId}`)
-      if (res.ok) {
-        const data = await res.json()
-        if (data && data.items) {
-          const session: ChatSession = localSessions.find(s => s.session_id === sessionId) || {
-            session_id: sessionId,
-            title: '历史会话',
-            last_message: '',
-            last_role: 'assistant',
-            last_ts: Date.now() / 1000,
-            message_count: data.items.length,
-            item_names: []
-          }
-          session.messages = data.items.map((item: any) => ({
-            id: item._id,
-            role: item.role,
-            text: item.text,
-            timestamp: item.ts || Date.now() / 1000,
-            item_names: item.item_names || [],
-            image_urls: item.image_urls || [],
-            sources: item.sources || [],
-            node_steps: item.node_steps || [],
-            total_duration: item.total_duration,
-            warnings: item.warnings || []
-          }))
-          return session
-        }
-      }
-    } catch {
-      // 忽略
+    const response = await authFetch(`${API_BASE}/history/${encodeURIComponent(sessionId)}`)
+    const data = await parseJsonResponse<{ session_id?: string; items?: any[] }>(response)
+    const items = data.items || []
+    return {
+      session_id: data.session_id || sessionId,
+      title: items[0]?.text?.slice(0, 20) || '历史会话',
+      last_message: items.at(-1)?.text || '',
+      last_role: items.at(-1)?.role || '',
+      last_ts: items.at(-1)?.ts || 0,
+      message_count: items.length,
+      item_names: items.at(-1)?.item_names || [],
+      messages: items.map(item => ({
+        id: item._id,
+        role: item.role,
+        text: item.text,
+        timestamp: item.ts || 0,
+        item_names: item.item_names || [],
+        image_urls: item.image_urls || [],
+        sources: item.sources || [],
+        node_steps: item.node_steps || [],
+        total_duration: item.total_duration,
+        warnings: item.warnings || [],
+      })),
     }
-    return localSessions.find(s => s.session_id === sessionId) || null
   },
 
   async deleteSession(sessionId: string): Promise<{ success: boolean }> {
-    localSessions = localSessions.filter(s => s.session_id !== sessionId)
-    try {
-      await fetch(`${API_BASE}/history/${sessionId}`, { method: 'DELETE' })
-    } catch {
-      // 忽略
-    }
+    const response = await authFetch(`${API_BASE}/history/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+    await parseJsonResponse(response)
     return { success: true }
   },
 
   async clearAllSessions(): Promise<{ success: boolean; deleted_count: number }> {
-    const count = localSessions.length
-    localSessions = []
-    try {
-      await fetch(`${API_BASE}/api/history/sessions`, { method: 'DELETE' })
-    } catch {
-      // 忽略
-    }
-    return { success: true, deleted_count: count }
+    const response = await authFetch(`${API_BASE}/api/history/sessions`, { method: 'DELETE' })
+    const data = await parseJsonResponse<{ deleted_count?: number }>(response)
+    return { success: true, deleted_count: data.deleted_count || 0 }
   }
 }

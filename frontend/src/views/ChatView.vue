@@ -206,7 +206,7 @@
               v-for="item in activeCandidates" 
               :key="item.id" 
               class="candidate-chip-btn"
-              @click="onCandidateConfirmed(item.item_name)"
+              @click="onCandidateConfirmed(item.id)"
             >
               <span class="chip-item-name">{{ item.item_name }}</span>
               <span class="chip-file-title" v-if="item.file_title">({{ item.file_title }})</span>
@@ -245,6 +245,7 @@ import { ref, onMounted, nextTick } from 'vue'
 import { Plus, MessageSquare, Trash2, Bot, User, Send, FileText, Activity, Check, Loader2, Cpu, ChevronDown, ChevronRight, Zap, Box, TriangleAlert } from 'lucide-vue-next'
 import type { ChatSession, ChatMessage, ChatWarning, CandidateItem, ChunkSource, KBChunk } from '../types'
 import { api } from '../services/api'
+import { streamSse, type SseEvent } from '../services/sse'
 import { renderMarkdown } from '../utils/markdown'
 import ChunkDetailDrawer from '../components/ChunkDetailDrawer.vue'
 
@@ -387,45 +388,109 @@ const handleEnter = (e: KeyboardEvent) => {
   }
 }
 
-const pollTaskNodeStatus = async (taskId: string): Promise<boolean> => {
-  const statusRes = await api.getTaskStatus(taskId)
-  const doneList = statusRes.done_list || []
-  const runningList = statusRes.running_list || []
-  const currentGlobalStatus = statusRes.status
+const normalizeCandidates = (candidates: any[] = []): CandidateItem[] => candidates.map(candidate => {
+  if (typeof candidate === 'string') {
+    return { id: candidate, item_name: candidate }
+  }
+  const id = String(candidate.id ?? candidate.item_name)
+  return {
+    id,
+    item_name: candidate.item_name || id,
+    file_title: candidate.file_title,
+    score: candidate.score,
+    description: candidate.description,
+  }
+})
 
-  const nodeDurations = statusRes.node_durations || {}
-  activeNodeSteps.value.forEach(node => {
-    const cnName = node.name
-    // 全精确比对，防止子串“切片搜索”误将“切片搜索(假设性文档)”点亮
-    const isDone = doneList.some((d: string) => d === cnName || d === node.node_id)
-    const isRunning = runningList.some((r: string) => r === cnName || r === node.node_id)
+const showConfirmation = (payload: any, query: string) => {
+  pendingRequestId.value = payload.request_id || pendingRequestId.value
+  activeCandidates.value = normalizeCandidates(payload.candidates || [])
+  pendingRequestQuery.value = query
+  showCandidateSelector.value = true
+  activeNodeSteps.value[0].status = 'paused'
+  isThinking.value = false
+}
 
-    if (isDone) {
-      node.status = 'completed'
-    } else if (isRunning) {
-      node.status = 'running'
-    }
-
-    if (nodeDurations[node.node_id] !== undefined) {
-      node.duration = nodeDurations[node.node_id]
-    }
+const appendAssistantMessage = (text: string, extras: Partial<ChatMessage> = {}) => {
+  messages.value.push({
+    id: `m-ast-${Date.now()}`,
+    role: 'assistant',
+    text,
+    timestamp: Date.now() / 1000,
+    node_steps: JSON.parse(JSON.stringify(activeNodeSteps.value)),
+    ...extras,
   })
+  scrollToBottom()
+}
 
-  if (runningList.length > 0) {
-    activeNodeText.value = `后端正在运行: ${runningList.join(', ')}`
+const errorMessage = (error: unknown) => error instanceof Error ? error.message : '问答请求失败'
+
+const applyProgress = (payload: any, message: ChatMessage) => {
+  const doneList: string[] = payload.done_list || []
+  const runningList: string[] = payload.running_list || []
+  const nodeDurations = payload.node_durations || {}
+  activeNodeSteps.value.forEach(node => {
+    if (doneList.some(value => value === node.name || value === node.node_id)) node.status = 'completed'
+    else if (runningList.some(value => value === node.name || value === node.node_id)) node.status = 'running'
+    if (nodeDurations[node.node_id] !== undefined) node.duration = nodeDurations[node.node_id]
+  })
+  if (runningList.length) activeNodeText.value = `后端正在运行: ${runningList.join(', ')}`
+  message.node_steps = JSON.parse(JSON.stringify(activeNodeSteps.value))
+}
+
+const consumeAnswerStream = async (requestId: string, query: string) => {
+  const assistantMsgIndex = messages.value.length
+  appendAssistantMessage('', { isStreaming: true })
+  let terminalReceived = false
+
+  try {
+    await streamSse(`/stream/${encodeURIComponent(requestId)}`, {}, async (event: SseEvent) => {
+      const message = messages.value[assistantMsgIndex]
+      if (!message) return
+
+      if (event.type === 'delta') {
+        if (typeof event.data.delta === 'string') message.text += event.data.delta
+      } else if (event.type === 'progress') {
+        applyProgress(event.data, message)
+      } else if (event.type === 'warning') {
+        mergeMessageWarnings(message, event.data)
+      } else if (event.type === 'confirmation_required') {
+        terminalReceived = true
+        showConfirmation(event.data, query)
+        if (!message.text) messages.value.splice(assistantMsgIndex, 1)
+      } else if (event.type === 'final') {
+        terminalReceived = true
+        if (typeof event.data.answer === 'string') message.text = event.data.answer
+        if (Array.isArray(event.data.sources)) message.sources = event.data.sources
+        if (Array.isArray(event.data.image_urls)) message.image_urls = event.data.image_urls
+        if (typeof event.data.total_duration === 'number') message.total_duration = event.data.total_duration
+        if (Array.isArray(event.data.node_steps)) message.node_steps = event.data.node_steps
+        mergeMessageWarnings(message, event.data)
+        activeNodeSteps.value.forEach(node => node.status = 'completed')
+        message.isStreaming = false
+        isThinking.value = false
+        await loadSessions().catch(() => undefined)
+      } else if (event.type === 'error') {
+        terminalReceived = true
+        message.text = typeof event.data.message === 'string' ? event.data.message : '问答请求失败'
+        message.isStreaming = false
+        isThinking.value = false
+      }
+      scrollToBottom()
+    })
+
+    if (!terminalReceived) throw new Error('问答流意外中断')
+  } catch (error) {
+    const message = messages.value[assistantMsgIndex]
+    if (message) {
+      message.text = errorMessage(error)
+      message.isStreaming = false
+    } else {
+      appendAssistantMessage(errorMessage(error))
+    }
+    isThinking.value = false
+    scrollToBottom()
   }
-
-  if (currentGlobalStatus === 'waiting_confirmation') {
-    activeNodeSteps.value[0].status = 'paused'
-    return true
-  }
-
-  if (currentGlobalStatus === 'completed' || doneList.includes('生成答案') || doneList.includes('node_answer_output')) {
-    activeNodeSteps.value.forEach(n => n.status = 'completed')
-    return false
-  }
-
-  return false
 }
 
 const sendUserMessage = async () => {
@@ -451,328 +516,63 @@ const sendUserMessage = async () => {
   activeNodeSteps.value = REAL_BACKEND_NODES.map(n => ({ ...n, status: 'pending', duration: undefined }))
   activeNodeSteps.value[0].status = 'running'
 
-  const isStream = isStreamMode.value
-  const res = await api.sendQuery(query, sid, isStream)
-  pendingRequestId.value = res.request_id || ''
+  try {
+    const isStream = isStreamMode.value
+    const response = await api.sendQuery(query, sid, isStream)
+    pendingRequestId.value = response.request_id
 
-  if (res.awaiting_confirmation && res.candidates && res.candidates.length > 0) {
+    if (response.status === 'confirmation_required') {
+      showConfirmation(response, query)
+      return
+    }
+    if (isStream) {
+      await consumeAnswerStream(response.request_id, query)
+      return
+    }
+    if (response.status !== 'final' || !response.answer) throw new Error('问答流程未产生有效答案')
+    activeNodeSteps.value.forEach(node => node.status = 'completed')
+    appendAssistantMessage(response.answer)
     isThinking.value = false
-    activeNodeSteps.value[0].status = 'paused'
-    
-    activeCandidates.value = res.candidates.map((c: any) => {
-      if (typeof c === 'string') return { id: c, item_name: c, file_title: `${c} 设备手册` }
-      return { id: c.id || c.item_name, item_name: c.item_name || c.id, file_title: c.file_title || `${c.item_name} 手册`, score: c.score }
-    })
-
-    pendingRequestQuery.value = query
-    showCandidateSelector.value = true
-    return
-  }
-
-  if (isStream) {
-    // ----------------------------------------------------
-    // ⚡ 流式打字机模式：创建占位消息，建立 W3C SSE 实时监听
-    // ----------------------------------------------------
-    const assistMsgId = `m-ast-${Date.now()}`
-    const assistantMsgIndex = messages.value.length
-    messages.value.push({
-      id: assistMsgId,
-      role: 'assistant',
-      text: '',
-      timestamp: Date.now() / 1000,
-      node_steps: JSON.parse(JSON.stringify(activeNodeSteps.value)),
-      isStreaming: true
-    })
-    scrollToBottom()
-
-    const sseUrl = `${location.protocol}//${location.host}/stream/${res.request_id}`
-    const es = new EventSource(sseUrl)
-
-    const handleSSEPayload = (eventData: string, eventType: string) => {
-      try {
-        const payload = JSON.parse(eventData)
-
-        if (eventType === 'warning') {
-          mergeMessageWarnings(messages.value[assistantMsgIndex], payload)
-          scrollToBottom()
-          return
-        }
-
-        // 1. 确认框事件 / 暂停信号
-        if (eventType === 'confirmation_required' || payload.event === 'confirmation_required' || payload.awaiting_confirmation) {
-          isThinking.value = false
-          activeNodeSteps.value[0].status = 'paused'
-          activeCandidates.value = (payload.candidates || payload.candidate_items || []).map((c: any) => {
-            if (typeof c === 'string') return { id: c, item_name: c, file_title: `${c} 设备手册` }
-            return { id: c.id || c.item_name, item_name: c.item_name || c.id, file_title: c.file_title || `${c.item_name} 手册`, score: c.score }
-          })
-          pendingRequestQuery.value = query
-          showCandidateSelector.value = true
-          es.close()
-          
-          if (messages.value[assistantMsgIndex] && !messages.value[assistantMsgIndex].text) {
-            messages.value.splice(assistantMsgIndex, 1)
-          }
-          return
-        }
-
-        // 2. 最终完成信号
-        if (eventType === 'final' || payload.status === 'completed' || payload.event === 'final') {
-          if (payload.answer) messages.value[assistantMsgIndex].text = payload.answer
-          if (payload.sources) messages.value[assistantMsgIndex].sources = payload.sources
-          if (payload.image_urls) messages.value[assistantMsgIndex].image_urls = payload.image_urls
-          if (payload.total_duration) messages.value[assistantMsgIndex].total_duration = payload.total_duration
-          if (payload.node_steps) messages.value[assistantMsgIndex].node_steps = payload.node_steps
-          mergeMessageWarnings(messages.value[assistantMsgIndex], payload)
-          
-          messages.value[assistantMsgIndex].isStreaming = false
-          isThinking.value = false
-          es.close()
-          scrollToBottom()
-          loadSessions()
-          return
-        }
-
-        // 3. 字符流输出
-        if (eventType === 'delta' || payload.delta) {
-          if (payload.delta) {
-            messages.value[assistantMsgIndex].text += payload.delta
-            scrollToBottom()
-          }
-        }
-
-        // 4. 节点运行进度
-        if (eventType === 'progress' || payload.done_list || payload.running_list) {
-          const doneList = payload.done_list || []
-          const runningList = payload.running_list || []
-          const nodeDurations = payload.node_durations || {}
-
-          activeNodeSteps.value.forEach(node => {
-            const isDone = doneList.some((d: string) => d === node.name || d === node.node_id)
-            const isRunning = runningList.some((r: string) => r === node.name || r === node.node_id)
-            if (isDone) node.status = 'completed'
-            else if (isRunning) node.status = 'running'
-            if (nodeDurations[node.node_id] !== undefined) node.duration = nodeDurations[node.node_id]
-          })
-          if (messages.value[assistantMsgIndex]) {
-            messages.value[assistantMsgIndex].node_steps = JSON.parse(JSON.stringify(activeNodeSteps.value))
-          }
-        }
-      } catch (e) {
-        console.error('SSE 数据解析错误', e)
-      }
-    }
-
-    es.addEventListener('delta', (e: any) => handleSSEPayload(e.data, 'delta'))
-    es.addEventListener('progress', (e: any) => handleSSEPayload(e.data, 'progress'))
-    es.addEventListener('warning', (e: any) => handleSSEPayload(e.data, 'warning'))
-    es.addEventListener('final', (e: any) => handleSSEPayload(e.data, 'final'))
-    es.addEventListener('confirmation_required', (e: any) => handleSSEPayload(e.data, 'confirmation_required'))
-    es.onmessage = (e: any) => handleSSEPayload(e.data, 'message')
-
-    es.onerror = () => {
-      es.close()
-      isThinking.value = false
-      if (messages.value[assistantMsgIndex]) {
-        messages.value[assistantMsgIndex].isStreaming = false
-      }
-    }
-  } else {
-    // ----------------------------------------------------
-    // 📦 阻塞全量模式：轮询等待，一次性同步返回
-    // ----------------------------------------------------
-    let isDone = false
-    let pollAttempts = 0
-    while (!isDone && pollAttempts < 300) {
-      await new Promise(r => setTimeout(r, 500))
-      pollAttempts++
-      const isPaused = await pollTaskNodeStatus(res.request_id)
-      if (isPaused) {
-        isThinking.value = false
-        showCandidateSelector.value = true
-        return
-      }
-      if (activeNodeSteps.value.every(n => n.status === 'completed')) {
-        isDone = true
-      }
-    }
-
+    await loadSessions().catch(() => undefined)
+  } catch (error) {
+    appendAssistantMessage(errorMessage(error))
     isThinking.value = false
-
-    let sessionDetail = await api.getSessionDetail(sid)
-    let lastMsg = sessionDetail?.messages?.length ? sessionDetail.messages[sessionDetail.messages.length - 1] : null
-
-    let retries = 0
-    while ((!lastMsg || lastMsg.role !== 'assistant') && retries < 20) {
-      await new Promise(r => setTimeout(r, 400))
-      retries++
-      sessionDetail = await api.getSessionDetail(sid)
-      lastMsg = sessionDetail?.messages?.length ? sessionDetail.messages[sessionDetail.messages.length - 1] : null
-    }
-
-    if (sessionDetail && sessionDetail.messages && sessionDetail.messages.length > 0) {
-      const lastMessage = sessionDetail.messages[sessionDetail.messages.length - 1]
-      if (lastMessage.role === 'assistant') {
-        messages.value = sessionDetail.messages
-        if (!lastMessage.node_steps || !lastMessage.node_steps.length || !lastMessage.node_steps.some((s: any) => s.duration !== undefined)) {
-          messages.value[messages.value.length - 1].node_steps = JSON.parse(JSON.stringify(activeNodeSteps.value))
-        }
-      }
-    }
-    scrollToBottom()
-    await loadSessions()
   }
 }
 
-const onCandidateConfirmed = async (candidateName: string) => {
+const onCandidateConfirmed = async (candidateId: string) => {
+  const candidate = activeCandidates.value.find(item => item.id === candidateId)
+  const candidateLabel = candidate?.item_name || candidateId
   showCandidateSelector.value = false
   isThinking.value = true
-  activeNodeText.value = `已确认学习主题 [${candidateName}]，正在恢复后端 LangGraph 状态机...`
+  activeNodeText.value = `已确认学习主题 [${candidateLabel}]，正在恢复后端 LangGraph 状态机...`
 
   activeNodeSteps.value[0].status = 'completed'
   activeNodeSteps.value[1].status = 'running'
 
-  let newReqId = pendingRequestId.value
   try {
-    const confirmRes = await fetch('/query/confirm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        session_id: currentSessionId.value,
-        pending_request_id: pendingRequestId.value,
-        candidate_id: candidateName
-      })
-    })
-
-    if (confirmRes.ok) {
-      const confirmData = await confirmRes.json()
-      if (confirmData.request_id) {
-        newReqId = confirmData.request_id
-      }
+    const response = await api.confirmQuery(
+      currentSessionId.value,
+      pendingRequestId.value,
+      candidateId,
+    )
+    pendingRequestId.value = response.request_id
+    if (response.status === 'confirmation_required') {
+      showConfirmation(response, pendingRequestQuery.value)
+      return
     }
-  } catch (e) {
-    console.warn('调用 confirm 接口异常，使用回退模型', e)
-  }
-
-  if (isStreamMode.value) {
-    const assistMsgId = `m-ast-${Date.now()}`
-    const assistantMsgIndex = messages.value.length
-    messages.value.push({
-      id: assistMsgId,
-      role: 'assistant',
-      text: '',
-      timestamp: Date.now() / 1000,
-      node_steps: JSON.parse(JSON.stringify(activeNodeSteps.value)),
-      isStreaming: true
-    })
-    scrollToBottom()
-
-    const sseUrl = `${location.protocol}//${location.host}/stream/${newReqId}`
-    const es = new EventSource(sseUrl)
-
-    const handleSSEPayload = (eventData: string, eventType: string) => {
-      try {
-        const payload = JSON.parse(eventData)
-
-        if (eventType === 'warning') {
-          mergeMessageWarnings(messages.value[assistantMsgIndex], payload)
-          scrollToBottom()
-          return
-        }
-
-        if (eventType === 'final' || payload.status === 'completed' || payload.event === 'final') {
-          if (payload.answer) messages.value[assistantMsgIndex].text = payload.answer
-          if (payload.sources) messages.value[assistantMsgIndex].sources = payload.sources
-          if (payload.image_urls) messages.value[assistantMsgIndex].image_urls = payload.image_urls
-          if (payload.total_duration) messages.value[assistantMsgIndex].total_duration = payload.total_duration
-          if (payload.node_steps) messages.value[assistantMsgIndex].node_steps = payload.node_steps
-          mergeMessageWarnings(messages.value[assistantMsgIndex], payload)
-          
-          messages.value[assistantMsgIndex].isStreaming = false
-          isThinking.value = false
-          es.close()
-          scrollToBottom()
-          loadSessions()
-          return
-        }
-
-        if (eventType === 'delta' || payload.delta) {
-          if (payload.delta) {
-            messages.value[assistantMsgIndex].text += payload.delta
-            scrollToBottom()
-          }
-        }
-
-        if (eventType === 'progress' || payload.done_list || payload.running_list) {
-          const doneList = payload.done_list || []
-          const runningList = payload.running_list || []
-          const nodeDurations = payload.node_durations || {}
-
-          activeNodeSteps.value.forEach(node => {
-            const isDone = doneList.some((d: string) => d === node.name || d === node.node_id)
-            const isRunning = runningList.some((r: string) => r === node.name || r === node.node_id)
-            if (isDone) node.status = 'completed'
-            else if (isRunning) node.status = 'running'
-            if (nodeDurations[node.node_id] !== undefined) node.duration = nodeDurations[node.node_id]
-          })
-          if (messages.value[assistantMsgIndex]) {
-            messages.value[assistantMsgIndex].node_steps = JSON.parse(JSON.stringify(activeNodeSteps.value))
-          }
-        }
-      } catch (e) {
-        console.error('SSE 数据解析错误', e)
-      }
+    if (response.status === 'processing') {
+      await consumeAnswerStream(response.request_id, pendingRequestQuery.value)
+      return
     }
-
-    es.addEventListener('delta', (e: any) => handleSSEPayload(e.data, 'delta'))
-    es.addEventListener('progress', (e: any) => handleSSEPayload(e.data, 'progress'))
-    es.addEventListener('warning', (e: any) => handleSSEPayload(e.data, 'warning'))
-    es.addEventListener('final', (e: any) => handleSSEPayload(e.data, 'final'))
-    es.onmessage = (e: any) => handleSSEPayload(e.data, 'message')
-
-    es.onerror = () => {
-      es.close()
-      isThinking.value = false
-      if (messages.value[assistantMsgIndex]) {
-        messages.value[assistantMsgIndex].isStreaming = false
-      }
-    }
-  } else {
-    let isDone = false
-    let pollAttempts = 0
-    while (!isDone && pollAttempts < 300) {
-      await new Promise(r => setTimeout(r, 500))
-      pollAttempts++
-      await pollTaskNodeStatus(newReqId)
-      if (activeNodeSteps.value.every(n => n.status === 'completed')) {
-        isDone = true
-      }
-    }
-
+    if (response.status !== 'final' || !response.answer) throw new Error('问答流程未产生有效答案')
+    activeNodeSteps.value.forEach(node => node.status = 'completed')
+    appendAssistantMessage(response.answer)
     isThinking.value = false
-
-    let sessionDetail = await api.getSessionDetail(currentSessionId.value)
-    let lastMsg = sessionDetail?.messages?.length ? sessionDetail.messages[sessionDetail.messages.length - 1] : null
-
-    let retries = 0
-    while ((!lastMsg || lastMsg.role !== 'assistant') && retries < 20) {
-      await new Promise(r => setTimeout(r, 400))
-      retries++
-      sessionDetail = await api.getSessionDetail(currentSessionId.value)
-      lastMsg = sessionDetail?.messages?.length ? sessionDetail.messages[sessionDetail.messages.length - 1] : null
-    }
-
-    if (sessionDetail && sessionDetail.messages && sessionDetail.messages.length > 0) {
-      const lastMessage = sessionDetail.messages[sessionDetail.messages.length - 1]
-      if (lastMessage.role === 'assistant') {
-        messages.value = sessionDetail.messages
-        if (!lastMessage.node_steps || !lastMessage.node_steps.length || !lastMessage.node_steps.some((s: any) => s.duration !== undefined)) {
-          messages.value[messages.value.length - 1].node_steps = JSON.parse(JSON.stringify(activeNodeSteps.value))
-        }
-      }
-    }
-    scrollToBottom()
-    await loadSessions()
+    await loadSessions().catch(() => undefined)
+  } catch (error) {
+    appendAssistantMessage(errorMessage(error))
+    isThinking.value = false
   }
 }
 

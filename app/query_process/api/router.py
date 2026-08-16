@@ -5,7 +5,12 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.auth.dependencies import build_current_user_dependency
-from app.query_process.api.query_server import ConfirmRequest, QueryRequest
+from app.clients.mongo_history_utils_new import (
+    clear_history,
+    delete_session,
+    get_all_sessions_summary,
+)
+from app.query_process.api.query_server import ConfirmRequest, QueryRequest, get_task_history
 from app.query_process.engine import (
     ConfirmRequest as EngineConfirmRequest,
     QueryConfigurationError,
@@ -78,6 +83,24 @@ def create_query_router(services, *, engine: QueryEngine | None = None) -> APIRo
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache"},
         )
+
+    @router.get("/history/{session_id}", summary="查询指定会话历史记录")
+    async def get_session_history(session_id: str, limit: int = 20, user=Depends(current_user)):
+        return get_task_history(user.id, session_id, limit)
+
+    @router.delete("/history/{session_id}", summary="删除指定会话")
+    async def delete_session_history(session_id: str, user=Depends(current_user)):
+        count = delete_session(user.id, session_id)
+        return {"code": 200, "message": "Session deleted", "deleted_count": count}
+
+    @router.get("/api/history/sessions", summary="聚合查询当前用户历史 Session 概要")
+    async def get_sessions(user=Depends(current_user)):
+        return {"code": 200, "data": get_all_sessions_summary(user.id)}
+
+    @router.delete("/api/history/sessions", summary="清空当前用户历史会话")
+    async def clear_sessions(user=Depends(current_user)):
+        count = clear_history(user.id)
+        return {"code": 200, "message": "All history cleared", "deleted_count": count}
 
     return router
 

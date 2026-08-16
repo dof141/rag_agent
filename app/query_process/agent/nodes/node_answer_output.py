@@ -240,6 +240,9 @@ def step_5_write_history(state: QueryGraphState):
     持久化聊天记录到 MongoDB
     """
     answer = state.get("answer", "")
+    user_id = state.get("user_id")
+    if not user_id:
+        raise ValueError("user_id is required for history access")
     session_id = state.get("session_id", "")
     item_names = state.get("item_names", [])
     rewritten_query = state.get("rewritten_query") or state.get("original_query") or ""
@@ -251,6 +254,7 @@ def step_5_write_history(state: QueryGraphState):
 
     if answer and session_id:
         save_chat_message(
+            user_id=user_id,
             session_id=session_id,
             role="assistant",
             text=answer,

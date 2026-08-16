@@ -36,6 +36,7 @@ from ragas.metrics import (
 )
 
 from app.core.logger import logger
+from app.eval.run_pipeline import summarize_samples
 from app.lm.lm_utils import get_llm_client
 from app.lm.embedding_utils import get_bge_m3_ef
 
@@ -73,7 +74,7 @@ def load_samples(path: Path) -> list[dict]:
     return rows
 
 
-def to_ragas_rows(samples: list[dict], *, skip_bad: bool = True) -> list[dict]:
+def to_ragas_rows(samples: list[dict], *, scorable_only: bool = False) -> list[dict]:
     """
     转换为符合 Ragas 最新规范的标准 Dataset 数据字典：
     - user_input: 用户输入问题
@@ -90,13 +91,16 @@ def to_ragas_rows(samples: list[dict], *, skip_bad: bool = True) -> list[dict]:
         response = s.get("response") or ""
         reference = s.get("reference") or ""
 
-        if skip_bad:
-            if status in ("error", "awaiting_confirmation", "empty_answer"):
-                logger.warning(f"[ragas] skip sample status={status} q={user_input[:40]}")
-                continue
-            if not response or not contexts:
-                logger.warning(f"[ragas] skip empty response/contexts q={user_input[:40]}")
-                continue
+        if scorable_only and (
+            status not in {"success", "ok", "final"}
+            or not response
+            or not contexts
+        ):
+            logger.warning(
+                f"[ragas] explicitly excluded unscorable sample "
+                f"status={status} q={user_input[:40]}"
+            )
+            continue
 
         rows.append(
             {
@@ -115,7 +119,11 @@ def main():
     parser.add_argument("--out", default=str(DEFAULT_OUT), help="分数 csv 输出路径")
     parser.add_argument("--model", default=None, help="裁判模型名")
     parser.add_argument("--with-answer-relevancy", action="store_true", help="开启 answer_relevancy（需 embeddings）")
-    parser.add_argument("--include-bad", action="store_true", help="不过滤失败样本")
+    parser.add_argument(
+        "--scorable-only",
+        action="store_true",
+        help="显式排除失败或空依据样本；默认保留全部样本",
+    )
     args = parser.parse_args()
 
     input_path = resolve_path(args.input)
@@ -127,7 +135,15 @@ def main():
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     raw = load_samples(input_path)
-    rows = to_ragas_rows(raw, skip_bad=not args.include_bad)
+    pipeline_summary = summarize_samples(raw)
+    summary_path = out_path.with_suffix(".summary.json")
+    summary_path.write_text(
+        json.dumps({"pipeline": pipeline_summary}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    logger.info(f"[ragas] pipeline summary={pipeline_summary}")
+
+    rows = to_ragas_rows(raw, scorable_only=args.scorable_only)
     if not rows:
         raise SystemExit("没有可评估样本，请先检查 pipeline 输出")
 
@@ -170,12 +186,19 @@ def main():
     logger.info(f"[ragas] scores saved -> {out_path}")
 
     # 保存 Summary 汇总 JSON
-    summary_path = out_path.with_suffix(".summary.json")
     try:
-        summary = dict(result)
+        metric_summary = dict(result)
     except Exception:
-        summary = {"result": str(result)}
-    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        metric_summary = {"result": str(result)}
+    summary = {
+        "pipeline": pipeline_summary,
+        "ragas": metric_summary,
+        "evaluated_samples": len(rows),
+        "scorable_only": args.scorable_only,
+    }
+    summary_path.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     logger.info(f"[ragas] summary saved -> {summary_path}")
 
 

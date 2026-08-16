@@ -146,9 +146,44 @@ python main.py
 
 ---
 
+## 认证问答与历史隔离
+
+问答、候选确认、SSE 和历史接口均要求登录接口签发的 Bearer Token。服务端按当前用户读取已经保存的 Embedding、向量库和重排序配置，并在一次请求期间冻结配置版本。远程链路应在设置页为同一用户同时配置 SiliconFlow Embedding 与 Qdrant；本地链路使用 BGE-M3 与 Milvus。配置缺失或组合不受支持时，`POST /query` 返回 `409`，不会退回到其他用户或全局默认配置。
+
+```http
+POST /query
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"query":"文档中的结论是什么？","session_id":"session-1","is_stream":true}
+```
+
+响应中的 `request_id` 用于连接 `GET /stream/{request_id}`。流可能发送 `delta`、`progress`、`warning`，并且只以 `final`、`confirmation_required` 或 `error` 之一结束。前端会显示服务端返回的公开错误，不再生成本地模拟答案。`error` 数据格式如下：
+
+```json
+{"code":"vector_store_unavailable","message":"知识库检索服务暂时不可用","retryable":true}
+```
+
+历史文档现在强制包含 `user_id`，旧记录默认对所有用户不可见。确认旧记录全部属于某个用户后，管理员必须显式执行一次迁移；命令只更新缺少 `user_id` 的记录，不会覆盖已有归属：
+
+```powershell
+.\.venv\Scripts\python.exe -m app.tools.assign_legacy_history `
+  --user-id <target-user-id> `
+  --confirm ASSIGN_LEGACY_HISTORY
+```
+
+---
+
 ## 📊 Ragas 自动化评估体系
 
 在 `app/eval/` 目录下引入 **Ragas** 评测指标对 RAG 系统的检索与回答质量进行常态化跑分：
+
+评测必须指定已有用户，以复用该用户的正式 QueryRuntime。Pipeline 输出会保留成功、执行失败和空依据三类样本，并生成同名 `.summary.json`；RAGAS 默认也不会过滤失败样本。
+
+```powershell
+.\.venv\Scripts\python.exe -m app.eval.run_pipeline --user-id <user-id>
+.\.venv\Scripts\python.exe -m app.eval.run_ragas
+```
 
 ```python
 from ragas import evaluate

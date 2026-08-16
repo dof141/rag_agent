@@ -16,12 +16,10 @@ from app.import_process.api.file_import_service import create_import_router
 from app.query_process.api.router import create_query_router
 from app.runtime_settings.router import create_settings_router
 from app.utils.task_utils import clean_interrupted_tasks_on_startup
-from app.query_process.api.query_server import get_task_history
 from app.clients.kb_admin_service import list_kb_items, get_kb_chunks, delete_kb_item, get_kb_stats, delete_single_chunk, update_single_chunk
 
 class UpdateChunkPayload(BaseModel):
     content: str
-from app.clients.mongo_history_utils_new import get_all_sessions_summary, delete_session, clear_history
 from app.utils.path_util import PROJECT_ROOT
 from app.core.logger import logger
 
@@ -115,27 +113,6 @@ class RAGServerManager:
         @app.get("/api/kb/stats", summary="获取系统与存储统计")
         async def get_stats():
             return {"code": 200, "data": get_kb_stats()}
-
-        # -----------------------------
-        # 5. 历史会话管理 API [新增与增强]
-        # -----------------------------
-        @app.get("/api/history/sessions", summary="聚合查询所有历史 Session 概要")
-        async def get_sessions():
-            return {"code": 200, "data": get_all_sessions_summary()}
-
-        @app.get("/history/{session_id}", summary="查询指定会话历史记录")
-        async def get_session_history_by_id(session_id: str, limit: int = 20):
-            return get_task_history(session_id, limit)
-
-        @app.delete("/history/{session_id}", summary="删除指定会话")
-        async def delete_session_by_id(session_id: str):
-            count = delete_session(session_id)
-            return {"code": 200, "message": "Session deleted", "deleted_count": count}
-
-        @app.delete("/api/history/sessions", summary="清空全量历史会话")
-        async def clear_all_history():
-            count = clear_history("")
-            return {"code": 200, "message": "All history cleared", "deleted_count": count}
 
     def _setup_static_frontend(self):
         """挂载打包后的 Vue 3 统一前端静态产物 (frontend/dist)，支持 SPA 路由兜底"""
