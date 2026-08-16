@@ -26,6 +26,7 @@ dependencies = [
     "pymongo>=4.16.0",
     "python-dotenv>=1.2.2",
     "python-multipart>=0.0.22",
+    "qdrant-client>=1.19.0",
     "ragas>=0.4.3",
     "regex>=2026.2.28",
     "requests>=2.32.0",
