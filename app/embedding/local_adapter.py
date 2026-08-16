@@ -43,6 +43,16 @@ class LocalBgeM3EmbeddingProvider(EmbeddingProvider):
 
     def embed_documents(self, texts: list[str]) -> EmbeddingResult:
         validate_texts(texts)
+        dense_vectors: list[list[float]] = []
+        sparse_vectors: list[dict[int, float]] = []
+        for start in range(0, len(texts), self._config.batch_size):
+            batch = texts[start : start + self._config.batch_size]
+            batch_result = self._embed_batch(batch)
+            dense_vectors.extend(batch_result["dense"])
+            sparse_vectors.extend(batch_result["sparse"])
+        return {"dense": dense_vectors, "sparse": sparse_vectors}
+
+    def _embed_batch(self, texts: list[str]) -> EmbeddingResult:
         embeddings = self.get_model().encode_documents(texts)
         sparse_matrix = embeddings["sparse"]
         sparse_vectors: list[dict[int, float]] = []

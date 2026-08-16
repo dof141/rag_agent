@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 
 from dotenv import load_dotenv
@@ -16,7 +16,7 @@ class EmbeddingConfig:
     batch_size: int
     request_timeout: float
     base_url: str
-    api_key: str | None
+    api_key: str | None = field(repr=False)
     bge_m3_path: str | None
     bge_m3: str | None
     bge_device: str

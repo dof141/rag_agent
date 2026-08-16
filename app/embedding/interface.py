@@ -1,10 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 
 class EmbeddingResult(TypedDict):
     dense: list[list[float]]
-    sparse: list[dict[int, float]]
+    sparse: NotRequired[list[dict[int, float]]]
 
 
 class EmbeddingError(RuntimeError):
@@ -19,6 +19,18 @@ class EmbeddingRequestError(EmbeddingError):
     """The remote embedding request failed."""
 
 
+class EmbeddingTimeoutError(EmbeddingRequestError):
+    """The remote embedding request timed out."""
+
+
+class EmbeddingAuthenticationError(EmbeddingRequestError):
+    """The remote embedding request was rejected by authentication."""
+
+
+class EmbeddingRateLimitError(EmbeddingRequestError):
+    """The remote embedding provider rate-limited the request."""
+
+
 class EmbeddingResponseError(EmbeddingError):
     """The embedding provider returned an invalid response."""
 
@@ -26,7 +38,7 @@ class EmbeddingResponseError(EmbeddingError):
 class EmbeddingProvider(ABC):
     @abstractmethod
     def embed_documents(self, texts: list[str]) -> EmbeddingResult:
-        """Generate dense and sparse vectors in input order."""
+        """Generate vectors in input order."""
 
 
 def validate_texts(texts: list[str]) -> None:

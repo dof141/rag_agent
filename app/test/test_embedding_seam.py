@@ -102,6 +102,17 @@ def import_node_without_task_storage(module_name):
     task_utils = ModuleType("app.utils.task_utils")
     task_utils.add_running_task = lambda *args, **kwargs: None
     task_utils.add_done_task = lambda *args, **kwargs: None
+    load_prompt = ModuleType("app.core.load_prompt")
+    load_prompt.load_prompt = lambda *args, **kwargs: "prompt"
+    lm_config = ModuleType("app.conf.lm_config")
+    lm_config.lm_config = type("LmConfig", (), {"item_name_timeout": 1})()
+    lm_utils = ModuleType("app.lm.lm_utils")
+    lm_utils.get_llm_client = lambda *args, **kwargs: None
+    embedding_utils = ModuleType("app.lm.embedding_utils")
+    embedding_utils.generate_embeddings = lambda texts: {
+        "dense": [[0.0, 0.0] for _ in texts],
+        "sparse": [{1: 0.5} for _ in texts],
+    }
     pymilvus = ModuleType("pymilvus")
     pymilvus.DataType = type(
         "DataType",
@@ -120,6 +131,10 @@ def import_node_without_task_storage(module_name):
         sys.modules,
         {
             "app.utils.task_utils": task_utils,
+            "app.core.load_prompt": load_prompt,
+            "app.conf.lm_config": lm_config,
+            "app.lm.lm_utils": lm_utils,
+            "app.lm.embedding_utils": embedding_utils,
             "app.clients.milvus_utils": milvus_utils,
             "pymilvus": pymilvus,
         },
@@ -163,6 +178,30 @@ class EmbeddingSeamTest(unittest.TestCase):
         factory.clear_embedding_provider_cache()
         third = factory.get_embedding_provider(config)
         self.assertIsNot(first, third)
+
+    def test_factory_siliconflow_does_not_import_local_heavy_dependencies(self):
+        sys.modules.pop("app.embedding.local_adapter", None)
+        before = set(sys.modules)
+
+        from app.embedding import factory
+
+        factory.clear_embedding_provider_cache()
+        provider = factory.create_embedding_provider(
+            make_config(adapter="siliconflow", output_type="dense")
+        )
+        after = set(sys.modules)
+
+        self.assertEqual(provider.__class__.__name__, "SiliconFlowEmbeddingAdapter")
+        self.assertNotIn("app.embedding.local_adapter", after)
+        self.assertFalse(
+            [
+                name
+                for name in after - before
+                if name == "torch"
+                or name.startswith("torch.")
+                or name.startswith("pymilvus.model")
+            ]
+        )
 
     def test_factory_initializes_provider_once_under_concurrency(self):
         from app.embedding import factory
@@ -324,7 +363,8 @@ class EmbeddingSeamTest(unittest.TestCase):
         )
         self.assertEqual(model_factory_calls, [])
 
-        result = provider.embed_documents(["local text"])
+        with patch("app.embedding.local_adapter.logger.info"):
+            result = provider.embed_documents(["local text"])
 
         self.assertEqual(model.texts, ["local text"])
         self.assertEqual(result, {"dense": [[1.0, 2.0]], "sparse": [{4: 0.25, 8: 0.75}]})
@@ -350,10 +390,11 @@ class EmbeddingSeamTest(unittest.TestCase):
             threading.Thread(target=lambda: models.append(provider.get_model()))
             for _ in range(5)
         ]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
+        with patch("app.embedding.local_adapter.logger.info"):
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
 
         self.assertEqual(len(created), 1)
         self.assertTrue(all(result is model for result in models))
@@ -512,6 +553,7 @@ class EmbeddingSeamTest(unittest.TestCase):
                 "get_milvus_client",
                 return_value=client,
             ),
+            patch.object(node_item_name_recognition, "logger"),
             patch.object(
                 node_item_name_recognition,
                 "embedding_config",
