@@ -2,10 +2,10 @@ import os
 import uvicorn
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, BackgroundTasks, File, UploadFile, Request, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 # 引入项目现有的导入服务逻辑与查询服务逻辑
@@ -13,12 +13,10 @@ from app.application_services import create_application_services_from_env
 from app.auth.dependencies import build_current_user_dependency
 from app.auth.router import create_auth_router
 from app.import_process.api.file_import_service import create_import_router
+from app.query_process.api.router import create_query_router
 from app.runtime_settings.router import create_settings_router
 from app.utils.task_utils import clean_interrupted_tasks_on_startup
-from app.query_process.api.query_server import (
-    query, stream, get_task_history, clear_chat_history, confirm,
-    QueryRequest, ConfirmRequest, mcp
-)
+from app.query_process.api.query_server import get_task_history
 from app.clients.kb_admin_service import list_kb_items, get_kb_chunks, delete_kb_item, get_kb_stats, delete_single_chunk, update_single_chunk
 
 class UpdateChunkPayload(BaseModel):
@@ -89,9 +87,7 @@ class RAGServerManager:
         # -----------------------------
         # 3. 问答检索与断点确认 API (原 8002 服务)
         # -----------------------------
-        app.add_api_route("/query", query, methods=["POST"], summary="问答提问")
-        app.add_api_route("/stream/{request_id}", stream, methods=["GET"], summary="SSE 流式推送到前端")
-        app.add_api_route("/query/confirm", confirm, methods=["POST"], summary="人工确认歧义实体")
+        app.include_router(create_query_router(self.services))
 
         # -----------------------------
         # 4. 向量知识库与切片管理 API [新增]
@@ -140,11 +136,6 @@ class RAGServerManager:
         async def clear_all_history():
             count = clear_history("")
             return {"code": 200, "message": "All history cleared", "deleted_count": count}
-
-        # -----------------------------
-        # 6. FastMCP SSE 挂载
-        # -----------------------------
-        app.mount("/mcp", mcp.sse_app())
 
     def _setup_static_frontend(self):
         """挂载打包后的 Vue 3 统一前端静态产物 (frontend/dist)，支持 SPA 路由兜底"""
