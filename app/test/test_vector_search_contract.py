@@ -51,29 +51,39 @@ class VectorSearchContractTest(unittest.TestCase):
             hit.score = 0.1
 
     def test_vector_search_protocol_exposes_search_contract(self):
+        search_items_signature = inspect.signature(VectorSearch.search_items)
+        search_chunks_signature = inspect.signature(VectorSearch.search_chunks)
+        search_items_hints = get_type_hints(VectorSearch.search_items)
+        search_chunks_hints = get_type_hints(VectorSearch.search_chunks)
+
         self.assertTrue(getattr(VectorSearch, "_is_protocol", False))
         self.assertEqual(
-            list(inspect.signature(VectorSearch.search_items).parameters),
+            list(search_items_signature.parameters),
             ["self", "query", "top_k"],
         )
         self.assertEqual(
-            list(inspect.signature(VectorSearch.search_chunks).parameters),
+            list(search_chunks_signature.parameters),
             ["self", "query", "item_names", "top_k"],
         )
         self.assertEqual(
-            inspect.signature(VectorSearch.search_items).parameters["top_k"].kind,
+            search_items_signature.parameters["top_k"].kind,
             inspect.Parameter.KEYWORD_ONLY,
         )
         self.assertEqual(
-            inspect.signature(VectorSearch.search_chunks).parameters["top_k"].kind,
+            search_chunks_signature.parameters["top_k"].kind,
             inspect.Parameter.KEYWORD_ONLY,
         )
+        self.assertEqual(search_items_signature.parameters["top_k"].default, 5)
+        self.assertEqual(search_chunks_signature.parameters["top_k"].default, 5)
+        self.assertIs(search_items_hints["query"], SearchQuery)
+        self.assertIs(search_chunks_hints["query"], SearchQuery)
+        self.assertEqual(search_chunks_hints["item_names"], list[str])
         self.assertEqual(
-            get_type_hints(VectorSearch.search_items)["return"],
+            search_items_hints["return"],
             list[SearchHit],
         )
         self.assertEqual(
-            get_type_hints(VectorSearch.search_chunks)["return"],
+            search_chunks_hints["return"],
             list[SearchHit],
         )
 
