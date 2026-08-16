@@ -179,6 +179,36 @@ class EmbeddingSeamTest(unittest.TestCase):
         third = factory.get_embedding_provider(config)
         self.assertIsNot(first, third)
 
+    def test_factory_cache_evicts_least_recently_used_provider(self):
+        from app.embedding import factory
+
+        cache_size = factory.EMBEDDING_PROVIDER_CACHE_MAX_SIZE
+        configs = [
+            make_config(model=f"model-{index}")
+            for index in range(cache_size + 1)
+        ]
+        factory.clear_embedding_provider_cache()
+        try:
+            with patch(
+                "app.embedding.factory.create_embedding_provider",
+                side_effect=lambda _config: object(),
+            ) as create_provider:
+                initial = [
+                    factory.get_embedding_provider(config)
+                    for config in configs[:cache_size]
+                ]
+                recently_used = factory.get_embedding_provider(configs[0])
+                factory.get_embedding_provider(configs[cache_size])
+                recreated = factory.get_embedding_provider(configs[1])
+                retained = factory.get_embedding_provider(configs[0])
+
+            self.assertIs(recently_used, initial[0])
+            self.assertIsNot(recreated, initial[1])
+            self.assertIs(retained, initial[0])
+            self.assertEqual(create_provider.call_count, cache_size + 2)
+        finally:
+            factory.clear_embedding_provider_cache()
+
     def test_factory_siliconflow_does_not_import_local_heavy_dependencies(self):
         sys.modules.pop("app.embedding.local_adapter", None)
         before = set(sys.modules)
