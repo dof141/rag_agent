@@ -3,18 +3,11 @@ import sys
 from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from pymilvus import DataType
 
-from app.clients.milvus_utils import get_milvus_client
-from app.conf.embedding_config import embedding_config
 from app.conf.lm_config import lm_config
-from app.conf.milvus_config import milvus_config
-from app.core.load_prompt import load_prompt
 from app.core.logger import logger
 from app.import_process.agent.state import ImportGraphState
-from app.lm.embedding_utils import generate_embeddings
 from app.lm.lm_utils import get_llm_client
-from app.utils.escape_milvus_string_utils import escape_milvus_string
 from app.utils.format_utils import format_state
 from app.utils.task_utils import add_running_task, add_done_task
 
@@ -23,9 +16,6 @@ from app.utils.task_utils import add_running_task, add_done_task
 2.提取前top chunks 对chunks 拼接上下文
 3.发给大模型总结得到 item_name
 4.修改state 中chunks 》item_name
-5.将得到的item_name embadding 向量化 得到稠密和稀疏向量
-6. 将item_name 与向量数据存入向量数据库 
-
 """
 # --- 配置参数 (Configuration) ---
 # 大模型识别商品名称的上下文切片数：取前5个切片，避免上下文过长导致大模型输入超限
@@ -86,12 +76,12 @@ def step_3_call_llm(context, file_title):
     """
     fallback_name = Path(file_title).stem
     try:
-        prompt = load_prompt(
+        prompt = _load_prompt(
             "item_name_recognition",
             file_title=file_title,
             context=context,
         )
-        system_prompt = load_prompt("product_recognition_system")
+        system_prompt = _load_prompt("product_recognition_system")
         llm = get_llm_client(
             json_mode=False,
             timeout=ITEM_NAME_TIMEOUT_SECONDS,
@@ -106,6 +96,18 @@ def step_3_call_llm(context, file_title):
         logger.warning(f"主题识别失败，使用文件名作为主题：{fallback_name}，原因：{e}")
         return fallback_name
 
+
+def _load_prompt(name: str, **kwargs) -> str:
+    try:
+        from app.core.load_prompt import load_prompt
+
+        return load_prompt(name, **kwargs)
+    except Exception:
+        if name == "item_name_recognition":
+            return f"请根据文件名 {kwargs.get('file_title', '')} 和内容识别主题：{kwargs.get('context', '')}"
+        return "你是文档主题识别助手。"
+
+
 def step_4_update_chunks_and_state(state, item_name, chunks):
     """
     更新chunks中内容
@@ -119,99 +121,6 @@ def step_4_update_chunks_and_state(state, item_name, chunks):
         chunk['item_name'] = item_name
     state["chunks"] = chunks
     logger.info("完成了state 和 chunks 中的[item_name]的赋值和修改")
-
-
-
-def step_5_generate_embeddings(item_name):
-    """
-    将item_name 进行embedding 化
-    :param item_name:
-    :return:
-    """
-    #获取generate_embeddings 封装的方法 直接传入文本即可
-    result = generate_embeddings([item_name])
-    dense_vector, sparse_vector = result['dense'][0], result['sparse'][0]
-    return dense_vector, sparse_vector
-
-
-def step_6_save_to_vector_db(file_title,item_name, dense_vector, sparse_vector):
-    """
-    将向量数据保存到向量数据库中
-    :param item_name:
-    :param file_title:
-    :param dense_vector:
-    :param sparse_vector:
-    :return:
-    """
-    #获取mlivus
-    milvus_client = get_milvus_client()
-
-    #判断指定集合是否存在
-    if not milvus_client.has_collection(collection_name=milvus_config.item_name_collection):
-        #不存在则创建
-        schema = milvus_client.create_schema(
-            auto_id =True, #自增长
-            #动态字段
-            enable_dynamic_field=True
-        )
-        #添加字段
-        schema.add_field(field_name="pk",datatype=DataType.INT64,is_primary=True)
-        schema.add_field(field_name="file_title",datatype=DataType.VARCHAR,max_length=65535)
-        schema.add_field(field_name="item_name",datatype=DataType.VARCHAR,max_length=65535)
-        schema.add_field(
-            field_name="dense_vector",
-            datatype=DataType.FLOAT_VECTOR,
-            dim=embedding_config.dimension,
-        )
-        schema.add_field(field_name="sparse_vector",datatype=DataType.SPARSE_FLOAT_VECTOR)
-        #配置索引
-        index_params = milvus_client.prepare_index_params()
-        index_params.add_index(
-            field_name="dense_vector",
-            index_name="dense_vector_index",
-            index_type="HNSW", #查找时用的算法
-            metric_type="COSINE",
-            params={
-                "M":16,
-                "efConstruction":200,
-            },
-        )
-        index_params.add_index(
-            field_name="sparse_vector",
-            index_name="sparse_vector_index",
-            index_type="SPARSE_INVERTED_INDEX", #查找时用的算法
-            metric_type="IP",
-            params={
-                "inverted_index_algo":"DAAT_MAXSCORE"
-            },
-        )
-        #创建集合
-        milvus_client.create_collection(
-            collection_name=milvus_config.item_name_collection,
-            schema=schema,
-            index_params=index_params,
-        )
-    #存在则先删除之前的item_name
-    milvus_client.load_collection(collection_name=milvus_config.item_name_collection)
-    milvus_client.delete(
-        collection_name=milvus_config.item_name_collection,
-        filter=f'item_name=="{item_name}"'
-    )
-    item={
-        "file_title":file_title,
-        "item_name":item_name,
-        "dense_vector":dense_vector,
-        "sparse_vector":sparse_vector,
-    }
-
-    milvus_client.insert(
-        collection_name=milvus_config.item_name_collection,
-        data=[item]
-    )
-    milvus_client.flush(collection_name=milvus_config.item_name_collection)  # 强制数据落盘
-    milvus_client.load_collection(collection_name=milvus_config.item_name_collection)
-    logger.info(f"保存了item_name:{item_name} 的数据到向量数据库中！！")
-
 
 def node_item_name_recognition(state: ImportGraphState) -> ImportGraphState:
     """
@@ -242,10 +151,6 @@ def node_item_name_recognition(state: ImportGraphState) -> ImportGraphState:
         item_name = step_3_call_llm(context, file_title)
         # 将state['chunks'] 加入 item_name
         step_4_update_chunks_and_state(state, item_name, chunks)
-        # 对item_name 进行向量化
-        dense_vector, sparse_vector = step_5_generate_embeddings(item_name)
-        # 将向量化后的数据存入向量数据库
-        step_6_save_to_vector_db(file_title, item_name, dense_vector, sparse_vector)
     except Exception as e:
         # 加上 exc_info=True，把具体的错误堆栈打出来！
         logger.error(f"[{func_name}] 节点出现异常: {str(e)}", exc_info=True)
@@ -305,21 +210,6 @@ def test_node_item_name_recognition():
         logger.info(f"最终识别商品名称：{result_state.get('item_name')}")
         logger.info(f"切片数量：{len(result_state.get('chunks', []))}")
         logger.info(f"第一个切片商品名称：{result_state.get('chunks', [{}])[0].get('item_name')}")
-
-        # 4. 验证Milvus存储（可选）
-        milvus_client = get_milvus_client()
-        collection_name =  milvus_config.item_name_collection
-        if milvus_client and collection_name:
-            milvus_client.load_collection(collection_name)
-            # 检索测试结果
-            item_name = result_state.get('item_name')
-            safe_name = escape_milvus_string(item_name)
-            res = milvus_client.query(
-                collection_name=collection_name,
-                filter=f'item_name=="{safe_name}"',
-                output_fields=["file_title", "item_name"]
-            )
-            logger.info(f"Milvus中检索到的数据：{res}")
 
     except Exception as e:
         logger.error(f"商品名称识别节点本地测试失败，原因：{str(e)}", exc_info=True)

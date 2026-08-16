@@ -9,6 +9,8 @@ class ImportGraphState(TypedDict):
     使用字典式访问（如state["session_id"]、state.get("embedding_chunks")）
     """
     task_id: str          # 任务唯一ID，用于追踪日志
+    user_id: str
+    document_id: str
 
     # --- 流程控制标记 ---
     is_md_read_enabled: bool   # 是否启用 Markdown 读取路径
@@ -34,6 +36,9 @@ class ImportGraphState(TypedDict):
     md_content: str       # Markdown 的全文内容
     chunks: list          # 切片后的文本列表，包含 metadata
     item_name: str        # 识别出的主体名称 (如: "万用表")，用于增强检索
+    item_dense_vector: tuple
+    item_sparse_vector: dict | None
+    import_result: dict
 
     # --- 数据库相关 ---
     embeddings_content: list # 包含向量数据的列表，准备写入 Milvus
@@ -43,6 +48,8 @@ class ImportGraphState(TypedDict):
 # 定义图状态的默认初始值
 graph_default_state: ImportGraphState = {
     "task_id":"",
+    "user_id": "",
+    "document_id": "",
     "is_pdf_read_enabled": False,
     "is_md_read_enabled": False,
     "is_normal_split_enabled": True,
@@ -59,6 +66,9 @@ graph_default_state: ImportGraphState = {
     "md_content": "",
     "chunks": [],
     "item_name": "",
+    "item_dense_vector": (),
+    "item_sparse_vector": None,
+    "import_result": {},
     "embeddings_content": []
 }
 

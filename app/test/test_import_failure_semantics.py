@@ -1,23 +1,26 @@
+import sys
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
-from app.import_process.agent.nodes import (
-    node_bge_embedding,
-    node_import_milvus,
-    node_item_name_recognition,
+from app.import_process.agent.nodes import node_item_name_recognition
+from app.import_process.errors import ImportTaskError
+from app.import_process.runtime import ImportRuntime
+from app.import_process.agent.nodes.node_generate_embeddings import (
+    create_generate_embeddings_node,
 )
 
 
 class ImportFailureSemanticsTest(unittest.TestCase):
     def test_item_name_timeout_falls_back_to_file_stem(self):
-        llm = Mock()
-        llm.invoke.side_effect = TimeoutError("provider timed out")
+        class FailingLlm:
+            def invoke(self, messages):
+                raise TimeoutError("provider timed out")
 
         with patch.object(
             node_item_name_recognition,
             "get_llm_client",
-            return_value=llm,
-        ) as get_client:
+            return_value=FailingLlm(),
+        ) as get_client, patch.object(node_item_name_recognition, "logger"):
             item_name = node_item_name_recognition.step_3_call_llm(
                 context="document context",
                 file_title="course-notes.docx",
@@ -29,7 +32,13 @@ class ImportFailureSemanticsTest(unittest.TestCase):
             timeout=node_item_name_recognition.ITEM_NAME_TIMEOUT_SECONDS,
         )
 
-    def test_item_name_embedding_failure_escapes_node(self):
+    def test_item_name_node_has_no_embedding_or_storage_side_effect(self):
+        self.assertFalse(hasattr(node_item_name_recognition, "step_5_generate_embeddings"))
+        self.assertFalse(hasattr(node_item_name_recognition, "step_6_save_to_vector_db"))
+        self.assertFalse(hasattr(node_item_name_recognition, "generate_embeddings"))
+        self.assertFalse(hasattr(node_item_name_recognition, "get_milvus_client"))
+
+        before_modules = set(sys.modules)
         state = {
             "task_id": "task-item-name",
             "chunks": [{"title": "Title", "content": "Content"}],
@@ -38,71 +47,40 @@ class ImportFailureSemanticsTest(unittest.TestCase):
 
         with (
             patch.object(node_item_name_recognition, "add_running_task"),
-            patch.object(node_item_name_recognition, "add_done_task") as done,
+            patch.object(node_item_name_recognition, "add_done_task"),
+            patch.object(node_item_name_recognition, "logger"),
             patch.object(
                 node_item_name_recognition,
                 "step_3_call_llm",
                 return_value="notes",
             ),
-            patch.object(
-                node_item_name_recognition,
-                "step_5_generate_embeddings",
-                side_effect=RuntimeError("embedding unavailable"),
-            ),
         ):
-            with self.assertRaisesRegex(RuntimeError, "embedding unavailable"):
-                node_item_name_recognition.node_item_name_recognition(state)
+            result = node_item_name_recognition.node_item_name_recognition(state)
 
-        done.assert_not_called()
+        self.assertEqual(result["item_name"], "notes")
+        self.assertEqual(result["chunks"][0]["item_name"], "notes")
+        after_modules = set(sys.modules)
+        self.assertFalse(
+            [
+                name
+                for name in after_modules - before_modules
+                if name.startswith("pymilvus") or name.startswith("pymilvus.model")
+            ]
+        )
 
-    def test_chunk_embedding_failure_escapes_node(self):
-        state = {
-            "task_id": "task-embedding",
-            "chunks": [
-                {"item_name": "notes", "content": "Content", "title": "Title"}
-            ],
-        }
+    def test_embedding_failure_becomes_public_import_task_error(self):
+        class FailingEmbedding:
+            def embed_documents(self, texts):
+                raise RuntimeError("provider secret body")
 
-        with (
-            patch.object(node_bge_embedding, "add_running_task"),
-            patch.object(node_bge_embedding, "add_done_task") as done,
-            patch.object(
-                node_bge_embedding,
-                "generate_embeddings",
-                side_effect=RuntimeError("embedding unavailable"),
-            ),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "embedding unavailable"):
-                node_bge_embedding.node_bge_embedding(state)
+        runtime = ImportRuntime(embedding=FailingEmbedding(), vector_store=object())
+        node = create_generate_embeddings_node(runtime.embedding)
 
-        done.assert_not_called()
+        with self.assertRaises(ImportTaskError) as raised:
+            node({"item_name": "notes", "chunks": [{"content": "Content"}]})
 
-    def test_milvus_failure_escapes_node(self):
-        state = {
-            "task_id": "task-milvus",
-            "chunks": [
-                {
-                    "item_name": "notes",
-                    "content": "Content",
-                    "dense_vector": [0.1],
-                    "sparse_vector": {1: 0.2},
-                }
-            ],
-        }
-
-        with (
-            patch.object(node_import_milvus, "add_running_task"),
-            patch.object(node_import_milvus, "add_done_task") as done,
-            patch.object(
-                node_import_milvus,
-                "get_milvus_client",
-                side_effect=RuntimeError("milvus unavailable"),
-            ),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "milvus unavailable"):
-                node_import_milvus.node_import_milvus(state)
-
-        done.assert_not_called()
+        self.assertEqual(raised.exception.stage, "embedding")
+        self.assertEqual(raised.exception.public_message, "文档向量生成失败")
 
 
 if __name__ == "__main__":
