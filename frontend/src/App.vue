@@ -1,5 +1,6 @@
 <template>
-  <div class="app-layout">
+  <router-view v-if="isLoginRoute" />
+  <div v-else class="app-layout">
     <Sidebar />
     <div class="main-content">
       <Header />
@@ -11,16 +12,21 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import Sidebar from './components/Sidebar.vue'
 import Header from './components/Header.vue'
 import { useAppStore } from './stores/appStore'
 
 const store = useAppStore()
+const route = useRoute()
+const isLoginRoute = computed(() => route.path === '/login')
 
 onMounted(async () => {
   document.documentElement.classList.remove('dark')
-  await store.fetchStats()
+  if (!isLoginRoute.value) {
+    await store.fetchStats()
+  }
 })
 </script>
 
