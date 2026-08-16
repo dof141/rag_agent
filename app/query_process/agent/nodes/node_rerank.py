@@ -16,7 +16,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import time
 import sys
 
-from app.retrieval import get_retrieval
 from app.retrieval.interface import RerankedDocuments
 from app.query_process.agent.state import QueryGraphState
 from app.utils.task_utils import add_running_task, add_done_task
@@ -103,6 +102,7 @@ def step_1_merge_rrf_mcp(state: QueryGraphState) -> list[dict]:
 def step_2_rerank_doc_list(
     doc_list: list[dict],
     state: QueryGraphState,
+    retrieval,
 ) -> RerankedDocuments:
     """
     将问题与整合后的 chunks 发给 Rerank 模型进行 Batch 分批打分并降序排序
@@ -121,7 +121,7 @@ def step_2_rerank_doc_list(
         )
 
     try:
-        reranked = get_retrieval().rerank_documents(query, doc_list)
+        reranked = retrieval.rerank_documents(query, doc_list)
     except Exception as e:
         logger.error(f"Rerank failed: {e}")
         return RerankedDocuments(
@@ -181,7 +181,14 @@ def step_3_topk(
     return doc_topk_list
 
 
-def node_rerank(state: QueryGraphState) -> dict:
+def create_rerank_node(retrieval):
+    def node_rerank(state: QueryGraphState) -> dict:
+        return _node_rerank(state, retrieval)
+
+    return node_rerank
+
+
+def _node_rerank(state: QueryGraphState, retrieval) -> dict:
     """
     LangGraph 节点函数：使用 Cross-Encoder 对多路召回文档精确打分并截断
     """
@@ -197,7 +204,7 @@ def node_rerank(state: QueryGraphState) -> dict:
         doc_list = step_1_merge_rrf_mcp(state)
 
         # 2. Rerank 模型计算得分与排序
-        reranked = step_2_rerank_doc_list(doc_list, state)
+        reranked = step_2_rerank_doc_list(doc_list, state, retrieval)
 
         # 3. 防断崖截取 TopK
         topk_docs = step_3_topk(

@@ -15,7 +15,6 @@ from app.query_process.agent.state import QueryGraphState
 from app.utils.task_utils import add_running_task, add_done_task
 from app.clients.mongo_history_utils import get_recent_messages, save_chat_message, update_message_item_names
 from app.lm.lm_utils import get_llm_client
-from app.retrieval import get_retrieval
 from dotenv import load_dotenv,find_dotenv
 from app.core.logger import logger
 
@@ -55,13 +54,13 @@ def step_3_llm_item_name_and_rewrite_query(original_query, history_chats)  ->Goo
                 return GoodsResponse(item_names=[], rewritten_query=original_query)
 
 
-def step_4_vectorize_and_query(item_names:List[str]) ->List[Dict]:
+def step_4_vectorize_and_query(item_names: List[str], retrieval) -> List[Dict]:
     """
     负责从向量数据库中查询对应匹配的item
     :param item_names:
     :return:
     """
-    final_result = get_retrieval().match_item_names(item_names)
+    final_result = retrieval.match_item_names(item_names)
     logger.info(f"向量混合检索完成，最终返回数据与得分：{final_result}")
     return final_result
 
@@ -150,7 +149,14 @@ def step_6_deal_list(state: QueryGraphState, item_results, history_chats, rewrit
     logger.info(f"未匹配到明确的 item_name，开启全局无过滤向量检索，当前结果: {item_results}")
     return state
 
-def node_item_name_confirm(state: QueryGraphState,):
+def create_item_name_confirm_node(retrieval):
+    def node_item_name_confirm(state: QueryGraphState):
+        return _node_item_name_confirm(state, retrieval)
+
+    return node_item_name_confirm
+
+
+def _node_item_name_confirm(state: QueryGraphState, retrieval):
     """
     节点功能：确认用户问题中的核心商品名称。
     1.获取历史聊天记录
@@ -205,7 +211,7 @@ def node_item_name_confirm(state: QueryGraphState,):
     item_results={}
     if len(item_names)>0:
         #从milvus 中取出匹配的item 集合 返回格式为 [{大模型item:{match:【{item:score},{item:score}】}},{}]
-        item_match = step_4_vectorize_and_query(item_names)
+        item_match = step_4_vectorize_and_query(item_names, retrieval)
         #从搜索到的向量数据中挑选出低分和和高分返回
         item_results = step_5_confirmed_and_optional_item_name(item_match)
         #将 返回的结果进行区分 确认 执行流程

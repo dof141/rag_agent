@@ -66,13 +66,13 @@ class RerankerDegradationTest(unittest.TestCase):
             "warnings": [dict(WARNING)],
         }
 
+        rerank_node = node_rerank.create_rerank_node(DegradedRetrieval())
         with (
-            patch.object(node_rerank, "get_retrieval", return_value=DegradedRetrieval()),
             patch.object(node_rerank, "add_running_task", lambda *args, **kwargs: None),
             patch.object(node_rerank, "add_done_task", lambda *args, **kwargs: None),
             patch.object(node_rerank, "push_to_session") as push,
         ):
-            result = node_rerank.node_rerank(state)
+            result = rerank_node(state)
 
         self.assertEqual(len(result["reranked_docs"]), 10)
         self.assertTrue(all("score" not in document for document in result["reranked_docs"]))

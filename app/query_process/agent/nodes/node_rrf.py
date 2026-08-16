@@ -31,7 +31,7 @@ def step_3_reciprocal_rank_fusion(score_chunks,top_k=5):
             #获取到 到chunk_id
             chunk_id = chunk['id'] or chunk.get('entity').get('chunk_id')
             #对分数进行计算 并保存 以chunk_id 保存
-            score_dict[chunk_id] = 1/(60+index) *weight
+            score_dict[chunk_id] = score_dict.get(chunk_id, 0.0) + weight / (60 + index)
             #保存chunks
             chunks_dict.setdefault(chunk_id,chunk)
     #对整理好的chunks进行融合重排

@@ -12,6 +12,7 @@ from app.utils.sse_utils import push_to_session, SSEEvent
 from app.utils.task_utils import add_running_task, add_done_task, set_task_result, get_node_durations, get_total_duration
 
 MAX_CONTEXT_CHARS = 12000
+NO_EVIDENCE_ANSWER = "知识库中没有足够依据回答该问题。"
 
 
 def step_1_check_answer(state: QueryGraphState) -> bool:
@@ -228,7 +229,6 @@ STANDARD_COMPLETED_NODES = [
     {"node_id": "node_item_name_confirm", "name": "确认学习主题", "status": "completed"},
     {"node_id": "node_search_embedding", "name": "切片搜索", "status": "completed"},
     {"node_id": "node_search_embedding_hyde", "name": "切片搜索(假设性文档)", "status": "completed"},
-    {"node_id": "node_web_search_mcp", "name": "网络搜索", "status": "completed"},
     {"node_id": "node_rrf", "name": "倒排融合", "status": "completed"},
     {"node_id": "node_rerank", "name": "重排序", "status": "completed"},
     {"node_id": "node_answer_output", "name": "生成答案", "status": "completed"}
@@ -279,34 +279,49 @@ def node_answer_output(state: QueryGraphState) -> dict:
     answer_exists = step_1_check_answer(state)
 
     if not answer_exists:
-        # 2. 大模型仅生成纯文本回答
-        prompt = step_2_load_prompt(state)
-        text_answer = step_3_create_answer(state, prompt)
+        if not state.get("reranked_docs"):
+            final_answer = NO_EVIDENCE_ANSWER
+            real_images = []
+            sources = []
+            state["image_urls"] = []
+            state["sources"] = []
+            if is_stream:
+                push_to_session(
+                    request_id,
+                    SSEEvent.DELTA,
+                    {"delta": final_answer},
+                )
+        else:
+            # 2. 大模型仅生成纯文本回答
+            prompt = step_2_load_prompt(state)
+            text_answer = step_3_create_answer(state, prompt)
 
-        # 3. 代码硬核提取原始切片里的图片
-        real_images = step_4_extract_images_url(state)
+            # 3. 代码硬核提取原始切片里的图片
+            real_images = step_4_extract_images_url(state)
 
-        # 4. 提取知识库引用来源 (Recall Sources)
-        sources = step_4_5_extract_sources(state)
+            # 4. 提取知识库引用来源 (Recall Sources)
+            sources = step_4_5_extract_sources(state)
 
-        # 4. 智能判断大模型是否已在段落中按语义嵌入图片
-        if real_images:
-            missing_images = []
-            for img_url in real_images:
-                parsed_path = urlparse(img_url).path
-                unquoted_path = unquote(parsed_path)
-                if (img_url not in text_answer and 
-                    parsed_path not in text_answer and 
-                    unquoted_path not in text_answer):
-                    missing_images.append(img_url)
-            
-            if missing_images:
-                img_block = "\n\n" + "\n\n".join([f"![参考图示]({url})" for url in missing_images])
-                final_answer = text_answer + img_block
+            # 4. 智能判断大模型是否已在段落中按语义嵌入图片
+            if real_images:
+                missing_images = []
+                for img_url in real_images:
+                    parsed_path = urlparse(img_url).path
+                    unquoted_path = unquote(parsed_path)
+                    if (img_url not in text_answer and
+                        parsed_path not in text_answer and
+                        unquoted_path not in text_answer):
+                        missing_images.append(img_url)
+
+                if missing_images:
+                    img_block = "\n\n" + "\n\n".join(
+                        [f"![参考图示]({url})" for url in missing_images]
+                    )
+                    final_answer = text_answer + img_block
+                else:
+                    final_answer = text_answer
             else:
                 final_answer = text_answer
-        else:
-            final_answer = text_answer
 
         state["answer"] = final_answer
 

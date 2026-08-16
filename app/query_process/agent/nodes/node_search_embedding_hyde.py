@@ -5,7 +5,6 @@ from langchain_core.messages import HumanMessage
 
 from app.core.load_prompt import load_prompt
 from app.lm.lm_utils import get_llm_client
-from app.retrieval import get_retrieval
 from app.utils.task_utils import  add_done_task,add_running_task
 from app.core.logger import logger
 
@@ -30,6 +29,7 @@ def step_1_create_hyde_doc(rewritten_query):
     return hyde_doc
 
 def step_2_search_embedding_hyde(
+    retrieval,
     rewritten_query: str,
     hyde_doc: str,
     item_names=None,
@@ -58,7 +58,7 @@ def step_2_search_embedding_hyde(
         raise ValueError("hypothetical_doc 不能为空")
 
     logger.info(f"Step 2: Query + HyDE Doc 总长度: {len(rewritten_query + ' ' + hyde_doc)}")
-    chunks = get_retrieval().search_chunks_with_hyde(
+    chunks = retrieval.search_chunks_with_hyde(
         query=rewritten_query,
         hyde_doc=hyde_doc,
         item_names=item_names,
@@ -69,7 +69,14 @@ def step_2_search_embedding_hyde(
 
 
 
-def node_search_embedding_hyde(state):
+def create_search_embedding_hyde_node(retrieval):
+    def node_search_embedding_hyde(state):
+        return _node_search_embedding_hyde(state, retrieval)
+
+    return node_search_embedding_hyde
+
+
+def _node_search_embedding_hyde(state, retrieval):
     """
     节点功能：HyDE (Hypothetical Document Embedding)
     先让 LLM 生成假设性答案，再对答案进行向量检索，提高召回率。
@@ -86,6 +93,7 @@ def node_search_embedding_hyde(state):
     hyde_doc = step_1_create_hyde_doc(rewritten_query)
     #将假设文档和用户问题进行拼接 再到向量数据库中进行查找
     hyde_embedding_chunks =  step_2_search_embedding_hyde(
+            retrieval=retrieval,
             rewritten_query=rewritten_query,
             hyde_doc=hyde_doc,
             item_names=item_names,

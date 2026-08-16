@@ -39,6 +39,7 @@ class QueryWarningFlowTest(unittest.TestCase):
             "session_id": "session-1",
             "is_stream": True,
             "original_query": "question",
+            "reranked_docs": [{"text": "supporting evidence"}],
             "warnings": [dict(WARNING)],
         }
 
@@ -128,21 +129,31 @@ class QueryWarningFlowTest(unittest.TestCase):
                         sys.modules[module_name] = previous
 
     def test_history_serializer_preserves_warnings_and_defaults_old_records(self):
-        from app.query_process.api.query_server import _serialize_history_record
+        from app.query_process.agent import main_graph
 
-        current = _serialize_history_record(
-            {
-                "_id": "message-1",
-                "session_id": "session-1",
-                "warnings": [dict(WARNING)],
-            }
-        )
-        legacy = _serialize_history_record(
-            {
-                "_id": "message-2",
-                "session_id": "session-1",
-            }
-        )
+        module_name = "app.query_process.api.query_server"
+        previous = sys.modules.pop(module_name, None)
+        try:
+            with patch.object(main_graph, "query_app", object(), create=True):
+                query_server = importlib.import_module(module_name)
+
+            current = query_server._serialize_history_record(
+                {
+                    "_id": "message-1",
+                    "session_id": "session-1",
+                    "warnings": [dict(WARNING)],
+                }
+            )
+            legacy = query_server._serialize_history_record(
+                {
+                    "_id": "message-2",
+                    "session_id": "session-1",
+                }
+            )
+        finally:
+            sys.modules.pop(module_name, None)
+            if previous is not None:
+                sys.modules[module_name] = previous
 
         self.assertEqual(current["warnings"], [WARNING])
         self.assertEqual(legacy["warnings"], [])

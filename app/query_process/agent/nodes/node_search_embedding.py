@@ -1,12 +1,18 @@
 import time
 import sys
 
-from app.retrieval import get_retrieval
 from app.utils.task_utils import add_done_task, add_running_task
 from app.core.logger import logger
 
 
-def node_search_embedding(state):
+def create_search_embedding_node(retrieval):
+    def node_search_embedding(state):
+        return _node_search_embedding(state, retrieval)
+
+    return node_search_embedding
+
+
+def _node_search_embedding(state, retrieval):
     """
     节点功能：进行向量内容检索
     从向量数据库中 对用户的提问进行向量搜索 并返回搜索到的结果
@@ -19,7 +25,7 @@ def node_search_embedding(state):
     rewritten_query = state["rewritten_query"]
     # 获取item
     item_names = state["item_names"]
-    embedding_chunks = get_retrieval().search_chunks(
+    embedding_chunks = retrieval.search_chunks(
         query=rewritten_query,
         item_names=item_names,
         top_k=5,

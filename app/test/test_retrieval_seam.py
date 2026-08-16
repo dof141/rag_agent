@@ -289,12 +289,12 @@ class RetrievalSeamTest(unittest.TestCase):
         from app.query_process.agent.nodes import node_search_embedding
 
         fake = FakeRetrieval()
+        search_node = node_search_embedding.create_search_embedding_node(fake)
         with (
-            patch.object(node_search_embedding, "get_retrieval", return_value=fake),
             patch.object(node_search_embedding, "add_running_task", lambda *args, **kwargs: None),
             patch.object(node_search_embedding, "add_done_task", lambda *args, **kwargs: None),
         ):
-            result = node_search_embedding.node_search_embedding(
+            result = search_node(
                 {
                     "request_id": "req-1",
                     "rewritten_query": "how to use it",
@@ -313,13 +313,13 @@ class RetrievalSeamTest(unittest.TestCase):
         from app.query_process.agent.nodes import node_search_embedding_hyde
 
         fake = FakeRetrieval()
-        with patch.object(node_search_embedding_hyde, "get_retrieval", return_value=fake):
-            result = node_search_embedding_hyde.step_2_search_embedding_hyde(
-                rewritten_query="how to use it",
-                hyde_doc="a hypothetical answer",
-                item_names=["demo"],
-                top_k=3,
-            )
+        result = node_search_embedding_hyde.step_2_search_embedding_hyde(
+            fake,
+            rewritten_query="how to use it",
+            hyde_doc="a hypothetical answer",
+            item_names=["demo"],
+            top_k=3,
+        )
 
         self.assertEqual(fake.calls, [("how to use it", "a hypothetical answer", ["demo"], 3)])
         self.assertEqual(result, [{"id": 2, "entity": {"content": "hyde answer", "item_name": "demo"}}])
@@ -328,8 +328,7 @@ class RetrievalSeamTest(unittest.TestCase):
         from app.query_process.agent.nodes import node_item_name_confirm
 
         fake = FakeRetrieval()
-        with patch.object(node_item_name_confirm, "get_retrieval", return_value=fake):
-            result = node_item_name_confirm.step_4_vectorize_and_query(["demo"])
+        result = node_item_name_confirm.step_4_vectorize_and_query(["demo"], fake)
 
         self.assertEqual(fake.calls, [("demo",)])
         self.assertEqual(result, [{"extracted": "demo", "matches": [{"item_name": "demo", "score": 0.91}]}])
@@ -339,11 +338,11 @@ class RetrievalSeamTest(unittest.TestCase):
 
         fake = FakeRetrieval()
         docs = [{"text": "candidate", "content": "candidate"}]
-        with patch.object(node_rerank, "get_retrieval", return_value=fake):
-            result = node_rerank.step_2_rerank_doc_list(
-                docs,
-                {"rewritten_query": "question"},
-            )
+        result = node_rerank.step_2_rerank_doc_list(
+            docs,
+            {"rewritten_query": "question"},
+            fake,
+        )
 
         self.assertEqual(fake.calls, [("question", docs)])
         self.assertEqual(
