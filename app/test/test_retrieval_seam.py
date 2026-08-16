@@ -206,6 +206,42 @@ class RetrievalSeamTest(unittest.TestCase):
             ],
         )
 
+    def test_search_chunks_rejects_blank_query_before_dependencies(self):
+        from app.retrieval.local_adapter import RetrievalModule
+
+        for query in ("", "  \t"):
+            with self.subTest(query=query):
+                embedding = RecordingEmbedding({"dense": [[0.1]]})
+                vector_search = RecordingVectorSearch()
+                retrieval = RetrievalModule(embedding, vector_search, object())
+
+                with self.assertRaisesRegex(ValueError, "query cannot be empty"):
+                    retrieval.search_chunks(query)
+
+                self.assertEqual(embedding.calls, [])
+                self.assertEqual(vector_search.chunk_calls, [])
+
+    def test_hyde_search_rejects_blank_inputs_before_dependencies(self):
+        from app.retrieval.local_adapter import RetrievalModule
+
+        cases = [
+            ("", "document", "query cannot be empty"),
+            ("  \t", "document", "query cannot be empty"),
+            ("question", "", "hyde_doc cannot be empty"),
+            ("question", " \n", "hyde_doc cannot be empty"),
+        ]
+        for query, hyde_doc, message in cases:
+            with self.subTest(query=query, hyde_doc=hyde_doc):
+                embedding = RecordingEmbedding({"dense": [[0.1]]})
+                vector_search = RecordingVectorSearch()
+                retrieval = RetrievalModule(embedding, vector_search, object())
+
+                with self.assertRaisesRegex(ValueError, message):
+                    retrieval.search_chunks_with_hyde(query, hyde_doc)
+
+                self.assertEqual(embedding.calls, [])
+                self.assertEqual(vector_search.chunk_calls, [])
+
     def test_embedding_count_mismatch_raises_stable_value_error(self):
         from app.retrieval.local_adapter import RetrievalModule
 
@@ -232,6 +268,22 @@ class RetrievalSeamTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "dense embedding"):
             retrieval.search_chunks("question")
+
+    def test_dense_dimension_mismatch_never_reaches_vector_search(self):
+        from app.retrieval.local_adapter import RetrievalModule
+
+        vector_search = RecordingVectorSearch()
+        retrieval = RetrievalModule(
+            RecordingEmbedding({"dense": [[0.1, 0.2]]}),
+            vector_search,
+            object(),
+            expected_dimension=3,
+        )
+
+        with self.assertRaisesRegex(ValueError, "dense embedding dimension"):
+            retrieval.search_chunks("question")
+
+        self.assertEqual(vector_search.chunk_calls, [])
 
     def test_node_search_embedding_uses_retrieval_interface(self):
         from app.query_process.agent.nodes import node_search_embedding
@@ -365,6 +417,29 @@ class RetrievalSeamTest(unittest.TestCase):
         self.assertTrue(result.degraded)
         self.assertEqual(result.warning_code, "reranker_unavailable")
         self.assertEqual(result.warning_message, "fallback order used")
+        self.assertEqual(docs, [{"text": "first"}, {"text": "second"}])
+
+    def test_retrieval_rejects_invalid_reranker_document_indexes(self):
+        from app.reranker.interface import RerankItem, RerankOutcome
+        from app.retrieval.local_adapter import RetrievalModule
+
+        docs = [{"text": "first"}, {"text": "second"}]
+        for invalid_index in (-1, 2, "1"):
+            with self.subTest(index=invalid_index):
+                retrieval = RetrievalModule(
+                    RecordingEmbedding({"dense": []}),
+                    RecordingVectorSearch(),
+                    lambda _query, _texts: RerankOutcome(
+                        items=[RerankItem(index=invalid_index, score=0.5)]
+                    ),
+                )
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "reranker returned invalid document index",
+                ):
+                    retrieval.rerank_documents("question", docs)
+
         self.assertEqual(docs, [{"text": "first"}, {"text": "second"}])
 
 

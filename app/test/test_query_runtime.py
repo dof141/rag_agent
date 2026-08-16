@@ -135,6 +135,75 @@ class QueryRuntimeFactoryTest(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             runtime.user_id = "other-user"
 
+    def test_rejects_embedding_and_vector_dimension_mismatch_before_factories(self):
+        from app.query_process.runtime import create_query_runtime
+
+        qdrant_config = QdrantVectorStoreConfig(
+            url="https://qdrant.example",
+            api_key="qdrant-secret",
+            item_collection="items",
+            chunks_collection="chunks",
+            dimension=4,
+        )
+        snapshot = UserRuntimeSnapshot(
+            user_id="user-a",
+            version=1,
+            embedding_config=self.embedding_config(),
+            vector_store_type="qdrant",
+            qdrant=qdrant_config,
+            milvus=None,
+        )
+        calls = []
+
+        with self.assertRaises(RuntimeSettingsConfigurationError):
+            create_query_runtime(
+                snapshot,
+                embedding_factory=lambda config: calls.append(("embedding", config)),
+                qdrant_factory=lambda config, user_id: calls.append(
+                    ("qdrant", config, user_id)
+                ),
+                milvus_factory=lambda *_args: self.fail(
+                    "milvus factory must not be called"
+                ),
+            )
+
+        self.assertEqual(calls, [])
+
+    def test_factory_passes_vector_dimension_to_retrieval_validation(self):
+        from app.query_process.runtime import create_query_runtime
+
+        class WrongDimensionEmbedding:
+            def embed_documents(self, texts):
+                return {"dense": [[0.1, 0.2] for _text in texts]}
+
+        class RecordingSearch:
+            def __init__(self):
+                self.calls = []
+
+            def search_chunks(self, query, item_names, *, top_k=5):
+                self.calls.append((query, item_names, top_k))
+                return []
+
+        snapshot = UserRuntimeSnapshot(
+            user_id="user-a",
+            version=1,
+            embedding_config=self.embedding_config(),
+            vector_store_type="qdrant",
+            qdrant=self.qdrant_config(),
+            milvus=None,
+        )
+        vector_search = RecordingSearch()
+        runtime = create_query_runtime(
+            snapshot,
+            embedding_factory=lambda _config: WrongDimensionEmbedding(),
+            qdrant_factory=lambda _config, _user_id: vector_search,
+        )
+
+        with self.assertRaisesRegex(ValueError, "dense embedding dimension"):
+            runtime.retrieval.search_chunks("question")
+
+        self.assertEqual(vector_search.calls, [])
+
     def test_rejects_invalid_snapshots_without_exposing_secrets(self):
         from app.query_process.runtime import create_query_runtime
 

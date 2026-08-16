@@ -28,9 +28,17 @@ def create_retrieval(
     else:
         raise RuntimeSettingsConfigurationError("查询运行配置缺失或组合不受支持")
 
+    if snapshot.embedding_config.dimension != vector_config.dimension:
+        raise RuntimeSettingsConfigurationError("查询运行配置的向量维度不一致")
+
     embedding = embedding_factory(snapshot.embedding_config)
     vector_search = vector_factory(vector_config, snapshot.user_id)
-    return RetrievalModule(embedding, vector_search, reranker)
+    return RetrievalModule(
+        embedding,
+        vector_search,
+        reranker,
+        expected_dimension=vector_config.dimension,
+    )
 
 
 def get_retrieval() -> Retrieval:
