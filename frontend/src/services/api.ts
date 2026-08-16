@@ -467,7 +467,8 @@ export const api = {
             image_urls: item.image_urls || [],
             sources: item.sources || [],
             node_steps: item.node_steps || [],
-            total_duration: item.total_duration
+            total_duration: item.total_duration,
+            warnings: item.warnings || []
           }))
           return session
         }

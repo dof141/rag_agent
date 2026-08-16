@@ -1,3 +1,8 @@
+export interface ChatWarning {
+  code: string
+  message: string
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -9,6 +14,7 @@ export interface ChatMessage {
   sources?: ChunkSource[]
   node_steps?: any[]
   total_duration?: number
+  warnings?: ChatWarning[]
   isStreaming?: boolean
   isStepsCollapsed?: boolean
 }

@@ -124,6 +124,18 @@
               <span v-if="msg.isStreaming" class="typewriter-cursor">▌</span>
             </div>
 
+            <div
+              v-if="msg.role === 'assistant' && msg.warnings?.length"
+              class="message-warnings"
+              role="status"
+              aria-live="polite"
+            >
+              <div v-for="warning in msg.warnings" :key="warning.code" class="message-warning">
+                <TriangleAlert class="warning-icon" />
+                <span>{{ warning.message }}</span>
+              </div>
+            </div>
+
             <!-- Citations & Sources (Recall Sources) -->
             <div v-if="msg.sources && msg.sources.length" class="sources-panel">
               <div class="sources-header">
@@ -230,8 +242,8 @@
 
 <script setup lang="ts">
 import { ref, onMounted, nextTick } from 'vue'
-import { Plus, MessageSquare, Trash2, Bot, User, Send, FileText, Activity, Check, Loader2, Cpu, ChevronDown, ChevronRight, Zap, Box } from 'lucide-vue-next'
-import type { ChatSession, ChatMessage, CandidateItem, ChunkSource, KBChunk } from '../types'
+import { Plus, MessageSquare, Trash2, Bot, User, Send, FileText, Activity, Check, Loader2, Cpu, ChevronDown, ChevronRight, Zap, Box, TriangleAlert } from 'lucide-vue-next'
+import type { ChatSession, ChatMessage, ChatWarning, CandidateItem, ChunkSource, KBChunk } from '../types'
 import { api } from '../services/api'
 import { renderMarkdown } from '../utils/markdown'
 import ChunkDetailDrawer from '../components/ChunkDetailDrawer.vue'
@@ -257,6 +269,32 @@ const REAL_BACKEND_NODES: NodeStep[] = [
   { node_id: 'node_rerank', name: '重排序', status: 'pending' },
   { node_id: 'node_answer_output', name: '生成答案', status: 'pending' }
 ]
+
+const mergeWarnings = (
+  current: ChatWarning[] = [],
+  incoming: ChatWarning[] = []
+) => {
+  const byCode = new Map(current.map(warning => [warning.code, warning]))
+  incoming.forEach(warning => byCode.set(warning.code, warning))
+  return Array.from(byCode.values())
+}
+
+const warningsFromPayload = (payload: any): ChatWarning[] => {
+  if (Array.isArray(payload?.warnings)) {
+    return payload.warnings.filter(
+      (warning: any) => typeof warning?.code === 'string' && typeof warning?.message === 'string'
+    )
+  }
+  if (typeof payload?.code === 'string' && typeof payload?.message === 'string') {
+    return [{ code: payload.code, message: payload.message }]
+  }
+  return []
+}
+
+const mergeMessageWarnings = (message: ChatMessage | undefined, payload: any) => {
+  if (!message) return
+  message.warnings = mergeWarnings(message.warnings, warningsFromPayload(payload))
+}
 
 const sessions = ref<ChatSession[]>([])
 const currentSessionId = ref<string>('')
@@ -454,6 +492,12 @@ const sendUserMessage = async () => {
       try {
         const payload = JSON.parse(eventData)
 
+        if (eventType === 'warning') {
+          mergeMessageWarnings(messages.value[assistantMsgIndex], payload)
+          scrollToBottom()
+          return
+        }
+
         // 1. 确认框事件 / 暂停信号
         if (eventType === 'confirmation_required' || payload.event === 'confirmation_required' || payload.awaiting_confirmation) {
           isThinking.value = false
@@ -479,6 +523,7 @@ const sendUserMessage = async () => {
           if (payload.image_urls) messages.value[assistantMsgIndex].image_urls = payload.image_urls
           if (payload.total_duration) messages.value[assistantMsgIndex].total_duration = payload.total_duration
           if (payload.node_steps) messages.value[assistantMsgIndex].node_steps = payload.node_steps
+          mergeMessageWarnings(messages.value[assistantMsgIndex], payload)
           
           messages.value[assistantMsgIndex].isStreaming = false
           isThinking.value = false
@@ -520,6 +565,7 @@ const sendUserMessage = async () => {
 
     es.addEventListener('delta', (e: any) => handleSSEPayload(e.data, 'delta'))
     es.addEventListener('progress', (e: any) => handleSSEPayload(e.data, 'progress'))
+    es.addEventListener('warning', (e: any) => handleSSEPayload(e.data, 'warning'))
     es.addEventListener('final', (e: any) => handleSSEPayload(e.data, 'final'))
     es.addEventListener('confirmation_required', (e: any) => handleSSEPayload(e.data, 'confirmation_required'))
     es.onmessage = (e: any) => handleSSEPayload(e.data, 'message')
@@ -628,12 +674,19 @@ const onCandidateConfirmed = async (candidateName: string) => {
       try {
         const payload = JSON.parse(eventData)
 
+        if (eventType === 'warning') {
+          mergeMessageWarnings(messages.value[assistantMsgIndex], payload)
+          scrollToBottom()
+          return
+        }
+
         if (eventType === 'final' || payload.status === 'completed' || payload.event === 'final') {
           if (payload.answer) messages.value[assistantMsgIndex].text = payload.answer
           if (payload.sources) messages.value[assistantMsgIndex].sources = payload.sources
           if (payload.image_urls) messages.value[assistantMsgIndex].image_urls = payload.image_urls
           if (payload.total_duration) messages.value[assistantMsgIndex].total_duration = payload.total_duration
           if (payload.node_steps) messages.value[assistantMsgIndex].node_steps = payload.node_steps
+          mergeMessageWarnings(messages.value[assistantMsgIndex], payload)
           
           messages.value[assistantMsgIndex].isStreaming = false
           isThinking.value = false
@@ -673,6 +726,7 @@ const onCandidateConfirmed = async (candidateName: string) => {
 
     es.addEventListener('delta', (e: any) => handleSSEPayload(e.data, 'delta'))
     es.addEventListener('progress', (e: any) => handleSSEPayload(e.data, 'progress'))
+    es.addEventListener('warning', (e: any) => handleSSEPayload(e.data, 'warning'))
     es.addEventListener('final', (e: any) => handleSSEPayload(e.data, 'final'))
     es.onmessage = (e: any) => handleSSEPayload(e.data, 'message')
 
@@ -1141,6 +1195,138 @@ const scrollToBottom = () => {
   border: 1px solid var(--border-color);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
   display: block;
+}
+
+.message-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  min-width: 0;
+}
+
+.message-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(202, 138, 4, 0.48);
+  border-radius: 6px;
+  background: rgba(250, 204, 21, 0.12);
+  color: #a16207;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.message-warning span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.warning-icon {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  flex: 0 0 16px;
+  color: #ca8a04;
+}
+
+:global(html.dark .message-warning) {
+  background: rgba(250, 204, 21, 0.09);
+  color: #fde68a;
+}
+
+@media (max-width: 768px) {
+  :global(.app-layout > .sidebar-container),
+  .sessions-sidebar,
+  :global(.header-right .model-badge) {
+    display: none;
+  }
+
+  :global(.main-content),
+  .chat-workspace {
+    width: 100%;
+    min-width: 0;
+  }
+
+  :global(.header-bar) {
+    height: 56px;
+    padding: 0 14px;
+  }
+
+  :global(.header-bar .page-title) {
+    font-size: 1rem;
+  }
+
+  .chat-container {
+    width: 100%;
+    height: calc(100vh - 56px);
+  }
+
+  .sample-chips {
+    min-height: 44px;
+    padding: 8px 12px;
+    justify-content: flex-end;
+  }
+
+  .sample-chips > .chip-label,
+  .sample-chips > .sample-chip {
+    display: none;
+  }
+
+  .messages-viewport {
+    padding: 12px;
+    gap: 16px;
+  }
+
+  .message-row {
+    width: 100%;
+    max-width: 100%;
+    gap: 8px;
+  }
+
+  .message-row.user {
+    width: auto;
+    max-width: 92%;
+  }
+
+  .msg-avatar {
+    width: 32px;
+    height: 32px;
+  }
+
+  .message-row.assistant .msg-card {
+    flex: 1;
+  }
+
+  .msg-card {
+    min-width: 0;
+    max-width: calc(100% - 40px);
+    padding: 12px;
+    border-radius: 8px;
+  }
+
+  .input-area {
+    padding: 10px 12px;
+  }
+
+  .input-box {
+    min-width: 0;
+    padding: 8px 10px;
+  }
+
+  .input-box textarea {
+    min-width: 0;
+  }
+
+  .send-btn {
+    padding: 8px;
+  }
+
+  .send-btn span {
+    display: none;
+  }
 }
 
 .sources-panel {
