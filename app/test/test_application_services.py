@@ -9,7 +9,9 @@ from app.application_services import (
     ApplicationConfigurationError,
     create_application_services,
     create_application_services_from_env,
+    create_import_runtime,
 )
+from app.query_process.runtime import create_query_runtime
 
 
 class ApplicationServicesTest(unittest.TestCase):
@@ -65,6 +67,13 @@ class ApplicationServicesTest(unittest.TestCase):
                 services = create_application_services_from_env()
 
         self.assertEqual(services.output_root, Path(config["RAG_OUTPUT_ROOT"]))
+
+    def test_services_bind_separate_import_and_query_runtime_factories(self):
+        with TemporaryDirectory() as temp_dir:
+            services = create_application_services(self.config(temp_dir))
+
+        self.assertIs(services.import_runtime_factory, create_import_runtime)
+        self.assertIs(services.query_runtime_factory, create_query_runtime)
 
 
 if __name__ == "__main__":

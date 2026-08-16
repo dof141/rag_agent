@@ -2,6 +2,33 @@ import unittest
 from unittest.mock import patch
 
 from app.retrieval.interface import RerankedDocuments
+from app.retrieval.models import SearchHit, SearchQuery
+
+
+class RecordingEmbedding:
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
+
+    def embed_documents(self, texts):
+        self.calls.append(list(texts))
+        return self.result
+
+
+class RecordingVectorSearch:
+    def __init__(self, *, item_hits=None, chunk_hits=None):
+        self.item_hits = item_hits or {}
+        self.chunk_hits = chunk_hits or []
+        self.item_calls = []
+        self.chunk_calls = []
+
+    def search_items(self, query, *, top_k=5):
+        self.item_calls.append((query, top_k))
+        return self.item_hits.get(query.text, [])
+
+    def search_chunks(self, query, item_names, *, top_k=5):
+        self.chunk_calls.append((query, list(item_names), top_k))
+        return list(self.chunk_hits)
 
 
 class FakeRetrieval:
@@ -26,6 +53,186 @@ class FakeRetrieval:
 
 
 class RetrievalSeamTest(unittest.TestCase):
+    def test_retrieval_module_exposes_injected_vector_search_as_read_only(self):
+        from app.retrieval.local_adapter import RetrievalModule
+
+        vector_search = RecordingVectorSearch()
+        retrieval = RetrievalModule(RecordingEmbedding({"dense": []}), vector_search, object())
+
+        self.assertIs(retrieval.vector_search, vector_search)
+        with self.assertRaises(AttributeError):
+            retrieval.vector_search = object()
+
+    def test_match_item_names_short_circuits_empty_input(self):
+        from app.retrieval.local_adapter import RetrievalModule
+
+        embedding = RecordingEmbedding({"dense": []})
+        vector_search = RecordingVectorSearch()
+        retrieval = RetrievalModule(embedding, vector_search, object())
+
+        self.assertEqual(retrieval.match_item_names([]), [])
+        self.assertEqual(embedding.calls, [])
+        self.assertEqual(vector_search.item_calls, [])
+
+    def test_match_item_names_batches_embeddings_and_preserves_input_order(self):
+        from app.retrieval.local_adapter import RetrievalModule
+
+        embedding = RecordingEmbedding(
+            {
+                "dense": [[0.1, 0.2], [0.3, 0.4]],
+                "sparse": [{1: 0.5}, {2: 0.6}],
+            }
+        )
+        vector_search = RecordingVectorSearch(
+            item_hits={
+                "alpha": [
+                    SearchHit(
+                        id="item-1",
+                        score=0.91,
+                        content="",
+                        item_name="Alpha Guide",
+                        file_title="",
+                        parent_title="",
+                    )
+                ],
+                "beta": [
+                    SearchHit(
+                        id="item-2",
+                        score=0.82,
+                        content="",
+                        item_name="Beta FAQ",
+                        file_title="",
+                        parent_title="",
+                    )
+                ],
+            }
+        )
+        retrieval = RetrievalModule(embedding, vector_search, object())
+
+        result = retrieval.match_item_names(["alpha", "beta"])
+
+        self.assertEqual(embedding.calls, [["alpha", "beta"]])
+        self.assertEqual(
+            vector_search.item_calls,
+            [
+                (SearchQuery("alpha", (0.1, 0.2), {1: 0.5}), 5),
+                (SearchQuery("beta", (0.3, 0.4), {2: 0.6}), 5),
+            ],
+        )
+        self.assertEqual(
+            result,
+            [
+                {
+                    "extracted": "alpha",
+                    "matches": [{"item_name": "Alpha Guide", "score": 0.91}],
+                },
+                {
+                    "extracted": "beta",
+                    "matches": [{"item_name": "Beta FAQ", "score": 0.82}],
+                },
+            ],
+        )
+
+    def test_search_chunks_embeds_and_returns_provider_neutral_dicts(self):
+        from app.retrieval.local_adapter import RetrievalModule
+
+        embedding = RecordingEmbedding(
+            {"dense": [[0.1, 0.2]], "sparse": [{4: 0.7}]}
+        )
+        hit = SearchHit(
+            id="chunk-1",
+            score=0.88,
+            content="answer",
+            item_name="guide",
+            file_title="manual.md",
+            parent_title="Install",
+            source="knowledge_base",
+        )
+        vector_search = RecordingVectorSearch(chunk_hits=[hit])
+        retrieval = RetrievalModule(embedding, vector_search, object())
+
+        result = retrieval.search_chunks("where", ["guide"], top_k=7)
+
+        self.assertEqual(embedding.calls, [["where"]])
+        self.assertEqual(
+            vector_search.chunk_calls,
+            [(SearchQuery("where", (0.1, 0.2), {4: 0.7}), ["guide"], 7)],
+        )
+        self.assertEqual(
+            result,
+            [
+                {
+                    "id": "chunk-1",
+                    "score": 0.88,
+                    "entity": {
+                        "content": "answer",
+                        "item_name": "guide",
+                        "file_title": "manual.md",
+                        "parent_title": "Install",
+                        "source": "knowledge_base",
+                    },
+                }
+            ],
+        )
+
+    def test_search_chunks_with_hyde_embeds_combined_text(self):
+        from app.retrieval.local_adapter import RetrievalModule
+
+        embedding = RecordingEmbedding({"dense": [[0.3]], "sparse": [{8: 0.4}]})
+        vector_search = RecordingVectorSearch()
+        retrieval = RetrievalModule(embedding, vector_search, object())
+
+        result = retrieval.search_chunks_with_hyde(
+            "question",
+            "hypothetical answer",
+            ["guide"],
+            top_k=3,
+        )
+
+        self.assertEqual(result, [])
+        self.assertEqual(embedding.calls, [["question hypothetical answer"]])
+        self.assertEqual(
+            vector_search.chunk_calls,
+            [
+                (
+                    SearchQuery(
+                        "question hypothetical answer",
+                        (0.3,),
+                        {8: 0.4},
+                    ),
+                    ["guide"],
+                    3,
+                )
+            ],
+        )
+
+    def test_embedding_count_mismatch_raises_stable_value_error(self):
+        from app.retrieval.local_adapter import RetrievalModule
+
+        vector_search = RecordingVectorSearch()
+        retrieval = RetrievalModule(
+            RecordingEmbedding({"dense": [[0.1]], "sparse": [{1: 0.2}]}),
+            vector_search,
+            object(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "embedding result count"):
+            retrieval.match_item_names(["alpha", "beta"])
+
+        self.assertEqual(vector_search.item_calls, [])
+
+    def test_empty_dense_vector_raises_stable_value_error(self):
+        from app.retrieval.local_adapter import RetrievalModule
+
+        retrieval = RetrievalModule(
+            RecordingEmbedding({"dense": [[]]}),
+            RecordingVectorSearch(),
+            object(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "dense embedding"):
+            retrieval.search_chunks("question")
+
     def test_node_search_embedding_uses_retrieval_interface(self):
         from app.query_process.agent.nodes import node_search_embedding
 
@@ -115,7 +322,11 @@ class RetrievalSeamTest(unittest.TestCase):
                 ]
             )
 
-        result = LocalRetrievalAdapter(reranker=fake_reranker).rerank_documents(
+        result = LocalRetrievalAdapter(
+            RecordingEmbedding({"dense": []}),
+            RecordingVectorSearch(),
+            fake_reranker,
+        ).rerank_documents(
             "question",
             docs,
         )
@@ -128,6 +339,33 @@ class RetrievalSeamTest(unittest.TestCase):
         self.assertEqual(result.documents[0]["score"], 0.9)
         self.assertNotIn("score", docs[0])
         self.assertNotIn("score", docs[1])
+
+    def test_retrieval_preserves_reranker_degradation_metadata(self):
+        from app.reranker.interface import RerankItem, RerankOutcome
+        from app.retrieval.local_adapter import RetrievalModule
+
+        docs = [{"text": "first"}, {"text": "second"}]
+
+        def degraded_reranker(query, texts):
+            self.assertEqual((query, texts), ("question", ["first", "second"]))
+            return RerankOutcome(
+                items=[RerankItem(index=1, score=None)],
+                degraded=True,
+                warning_code="reranker_unavailable",
+                warning_message="fallback order used",
+            )
+
+        result = RetrievalModule(
+            RecordingEmbedding({"dense": []}),
+            RecordingVectorSearch(),
+            degraded_reranker,
+        ).rerank_documents("question", docs)
+
+        self.assertEqual(result.documents, [{"text": "second"}])
+        self.assertTrue(result.degraded)
+        self.assertEqual(result.warning_code, "reranker_unavailable")
+        self.assertEqual(result.warning_message, "fallback order used")
+        self.assertEqual(docs, [{"text": "first"}, {"text": "second"}])
 
 
 if __name__ == "__main__":

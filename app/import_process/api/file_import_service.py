@@ -48,7 +48,7 @@ def create_import_router(services) -> APIRouter:
     ):
         try:
             snapshot = services.settings.get_snapshot(user.id)
-            runtimes = [services.runtime_factory(snapshot) for _file in files]
+            runtimes = [services.import_runtime_factory(snapshot) for _file in files]
         except (
             RuntimeSettingsConfigurationError,
             VectorStoreConfigurationError,
@@ -161,7 +161,7 @@ def create_import_router(services) -> APIRouter:
         if not local_file_path or not os.path.exists(local_file_path):
             raise HTTPException(status_code=400, detail="本地源文件不存在，请重新上传文件进行导入")
         snapshot = services.settings.get_snapshot(user.id)
-        runtime = services.runtime_factory(snapshot)
+        runtime = services.import_runtime_factory(snapshot)
         try:
             services.task_repository.upsert(
                 task_id,

@@ -1,106 +1,78 @@
-from typing import Any, Dict, List
+from typing import Any
 
-from app.clients.milvus_utils import create_hybrid_search_requests, get_milvus_client, hybrid_search
-from app.conf.milvus_config import milvus_config
-from app.core.logger import logger
-from app.lm.embedding_utils import generate_embeddings
-from app.reranker import rerank_texts
-from app.retrieval.interface import RerankedDocuments, SearchHit
+from app.embedding.interface import EmbeddingProvider
+from app.retrieval.interface import RerankedDocuments
+from app.retrieval.models import SearchHit, SearchQuery
+from app.retrieval.vector_search import VectorSearch
 
 
-class LocalRetrievalAdapter:
-    def __init__(self, reranker=rerank_texts):
+class RetrievalModule:
+    def __init__(self, embedding: EmbeddingProvider, vector_search: VectorSearch, reranker):
+        self._embedding = embedding
+        self._vector_search = vector_search
         self._reranker = reranker
+
+    @property
+    def vector_search(self) -> VectorSearch:
+        return self._vector_search
+
+    def match_item_names(self, item_names: list[str]) -> list[dict[str, Any]]:
+        if not item_names:
+            return []
+
+        queries = self._embed_queries(item_names)
+        results = []
+        for item_name, query in zip(item_names, queries):
+            hits = self._vector_search.search_items(query, top_k=5)
+            results.append(
+                {
+                    "extracted": item_name,
+                    "matches": [
+                        {"item_name": hit.item_name, "score": hit.score}
+                        for hit in hits
+                        if hit.item_name
+                    ],
+                }
+            )
+        return results
 
     def search_chunks(
         self,
         query: str,
-        item_names: List[str] | None = None,
+        item_names: list[str] | None = None,
         *,
         top_k: int = 5,
-    ) -> List[SearchHit]:
-        embedding = generate_embeddings([query])
-        reqs = create_hybrid_search_requests(
-            dense_vector=embedding["dense"][0],
-            sparse_vector=embedding["sparse"][0],
-            limit=10,
-            expr=self._item_filter(item_names),
-        )
-        response = self._hybrid_search(
-            collection_name=milvus_config.chunks_collection,
-            reqs=reqs,
-            ranker_weights=(0.9, 0.1),
+    ) -> list[dict[str, Any]]:
+        search_query = self._embed_queries([query])[0]
+        hits = self._vector_search.search_chunks(
+            search_query,
+            list(item_names or []),
             top_k=top_k,
-            output_fields=["chunk_id", "content", "item_name", "file_title", "parent_title"],
         )
-        return response[0] if response else []
+        return [self._to_chunk_dict(hit) for hit in hits]
 
     def search_chunks_with_hyde(
         self,
         query: str,
         hyde_doc: str,
-        item_names: List[str] | None = None,
+        item_names: list[str] | None = None,
         *,
         top_k: int = 5,
-    ) -> List[SearchHit]:
+    ) -> list[dict[str, Any]]:
         if not query:
             raise ValueError("query cannot be empty")
         if not hyde_doc:
             raise ValueError("hyde_doc cannot be empty")
-        combined_text = f"{query} {hyde_doc}"
-        embedding = generate_embeddings([combined_text])
-        reqs = create_hybrid_search_requests(
-            dense_vector=embedding["dense"][0],
-            sparse_vector=embedding["sparse"][0],
-            limit=10,
-            expr=self._item_filter(item_names),
-        )
-        response = self._hybrid_search(
-            collection_name=milvus_config.chunks_collection,
-            reqs=reqs,
-            ranker_weights=(0.9, 0.1),
+        return self.search_chunks(
+            f"{query} {hyde_doc}",
+            item_names,
             top_k=top_k,
-            output_fields=["chunk_id", "content", "item_name", "file_title", "parent_title"],
         )
-        return response[0] if response else []
-
-    def match_item_names(self, item_names: List[str]) -> List[Dict[str, Any]]:
-        if not item_names:
-            return []
-
-        embedding = generate_embeddings(item_names)
-        final_result = []
-        for index, item_name in enumerate(item_names):
-            reqs = create_hybrid_search_requests(
-                embedding["dense"][index],
-                embedding["sparse"][index],
-            )
-            response = self._hybrid_search(
-                collection_name=milvus_config.item_name_collection,
-                reqs=reqs,
-                ranker_weights=(0.8, 0.2),
-                top_k=5,
-                output_fields=["item_name"],
-            )
-            matches = []
-            if response and len(response) > 0:
-                for hit in response[0]:
-                    entity = hit.get("entity", {})
-                    hit_name = entity.get("item_name")
-                    if hit_name:
-                        matches.append(
-                            {
-                                "item_name": hit_name,
-                                "score": hit.get("distance", 0),
-                            }
-                        )
-            final_result.append({"extracted": item_name, "matches": matches})
-        return final_result
 
     def rerank_documents(
         self,
         query: str,
-        documents: List[Dict[str, Any]],
+        documents: list[dict[str, Any]],
     ) -> RerankedDocuments:
         if not documents:
             return RerankedDocuments(documents=[])
@@ -120,30 +92,39 @@ class LocalRetrievalAdapter:
             warning_message=outcome.warning_message,
         )
 
-    def _hybrid_search(
-        self,
-        *,
-        collection_name: str,
-        reqs,
-        ranker_weights,
-        top_k: int,
-        output_fields: List[str],
-    ):
-        milvus_client = get_milvus_client()
-        if not milvus_client:
-            logger.error("Cannot connect to Milvus")
-            return None
-        return hybrid_search(
-            client=milvus_client,
-            collection_name=collection_name,
-            reqs=reqs,
-            ranker_weights=ranker_weights,
-            limit=top_k,
-            norm_score=True,
-            output_fields=output_fields,
-        )
+    def _embed_queries(self, texts: list[str]) -> list[SearchQuery]:
+        embedding = self._embedding.embed_documents(texts)
+        dense_vectors = embedding.get("dense") or []
+        if len(dense_vectors) != len(texts):
+            raise ValueError("embedding result count does not match input texts")
+
+        sparse_vectors = embedding.get("sparse")
+        if sparse_vectors is not None and len(sparse_vectors) != len(texts):
+            raise ValueError("embedding result count does not match input texts")
+
+        queries = []
+        for index, text in enumerate(texts):
+            dense = dense_vectors[index]
+            if not dense:
+                raise ValueError("dense embedding cannot be empty")
+            sparse = None if sparse_vectors is None else dict(sparse_vectors[index])
+            queries.append(SearchQuery(text=text, dense=tuple(dense), sparse=sparse))
+        return queries
 
     @staticmethod
-    def _item_filter(item_names: List[str] | None) -> str | None:
-        quoted = ", ".join(f'"{v}"' for v in item_names) if item_names else ""
-        return f"item_name in [{quoted}]" if item_names else None
+    def _to_chunk_dict(hit: SearchHit) -> dict[str, Any]:
+        return {
+            "id": hit.id,
+            "score": hit.score,
+            "entity": {
+                "content": hit.content,
+                "item_name": hit.item_name,
+                "file_title": hit.file_title,
+                "parent_title": hit.parent_title,
+                "source": hit.source,
+            },
+        }
+
+
+# Transitional import compatibility while query nodes are migrated.
+LocalRetrievalAdapter = RetrievalModule

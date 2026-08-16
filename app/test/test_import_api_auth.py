@@ -75,7 +75,7 @@ class ImportApiAuthTest(unittest.TestCase):
         self.tokens = JwtTokenService("unit-test-signing-secret", 60)
         self.settings = FakeSettings()
         self.tasks = FakeTaskRepository()
-        self.runtime_factory = RecordingRuntimeFactory()
+        self.import_runtime_factory = RecordingRuntimeFactory()
         self.status_patchers = [
             patch("app.import_process.api.file_import_service.add_running_task"),
             patch("app.import_process.api.file_import_service.add_done_task"),
@@ -89,7 +89,7 @@ class ImportApiAuthTest(unittest.TestCase):
             tokens=self.tokens,
             settings=self.settings,
             task_repository=self.tasks,
-            runtime_factory=self.runtime_factory,
+            import_runtime_factory=self.import_runtime_factory,
             output_root=Path(self.temp_dir.name) / "output",
         )
         app = FastAPI()
@@ -134,7 +134,7 @@ class ImportApiAuthTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         task_id = response.json()["task_ids"][0]
         self.assertEqual(self.tasks.tasks[task_id]["user_id"], self.user_a.id)
-        self.assertEqual(self.runtime_factory.created_versions, [1])
+        self.assertEqual(self.import_runtime_factory.created_versions, [1])
 
         hidden = self.client.get(f"/status/{task_id}", headers=self.auth(self.user_b.id))
         self.assertEqual(hidden.status_code, 404)
@@ -155,10 +155,10 @@ class ImportApiAuthTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(self.runtime_factory.created_versions, [1, 1])
+        self.assertEqual(self.import_runtime_factory.created_versions, [1, 1])
         self.assertIsNot(
-            self.runtime_factory.runtimes[0],
-            self.runtime_factory.runtimes[1],
+            self.import_runtime_factory.runtimes[0],
+            self.import_runtime_factory.runtimes[1],
         )
         self.assertEqual(run_graph_task.call_count, 2)
 
@@ -289,7 +289,7 @@ class ImportApiAuthTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.tasks.tasks["task-retry"]["settings_version"], 2)
         self.assertEqual(self.tasks.tasks["task-retry"]["status"], "pending")
-        self.assertEqual(self.runtime_factory.created_versions, [2])
+        self.assertEqual(self.import_runtime_factory.created_versions, [2])
         run_graph_task.assert_called_once()
 
     def test_run_graph_task_maps_public_import_errors(self):
@@ -310,7 +310,7 @@ class ImportApiAuthTest(unittest.TestCase):
             "manual.md",
             self.user_a.id,
             "doc-a",
-            self.runtime_factory.runtime,
+            self.import_runtime_factory.runtime,
             task_repository=self.tasks,
             graph_builder=failing_graph,
         )
@@ -342,7 +342,7 @@ class ImportApiAuthTest(unittest.TestCase):
                 "manual.md",
                 self.user_a.id,
                 "doc-a",
-                self.runtime_factory.runtime,
+                self.import_runtime_factory.runtime,
                 task_repository=self.tasks,
                 graph_builder=graph_builder,
             )

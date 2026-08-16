@@ -8,6 +8,7 @@ from app.embedding.factory import create_embedding_provider
 from app.import_process.runtime import ImportRuntime
 from app.import_process.task_repository import MongoTaskRepository
 from app.persistence.sqlite_database import SQLiteDatabase
+from app.query_process.runtime import create_query_runtime
 from app.runtime_settings.crypto import SecretCipher
 from app.runtime_settings.repository import RuntimeSettingsRepository
 from app.runtime_settings.service import RuntimeSettingsService
@@ -36,7 +37,8 @@ class ApplicationServices:
     tokens: JwtTokenService
     settings: RuntimeSettingsService
     task_repository: MongoTaskRepository
-    runtime_factory: object
+    import_runtime_factory: object
+    query_runtime_factory: object
     output_root: Path
     admin_username: str
     admin_password: str = field(repr=False)
@@ -77,7 +79,8 @@ def create_application_services(config: dict[str, str | None]) -> ApplicationSer
         tokens=tokens,
         settings=settings,
         task_repository=MongoTaskRepository(),
-        runtime_factory=create_import_runtime,
+        import_runtime_factory=create_import_runtime,
+        query_runtime_factory=create_query_runtime,
         output_root=Path(config.get("RAG_OUTPUT_ROOT") or Path.cwd() / "output"),
         admin_username=config["RAG_ADMIN_USERNAME"],
         admin_password=config["RAG_ADMIN_PASSWORD"],
