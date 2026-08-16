@@ -120,7 +120,7 @@ class MilvusVectorSearchTest(unittest.TestCase):
         self.assertEqual(call["limit"], 5)
         self.assertEqual(
             call["output_fields"],
-            ["item_id", "content", "item_name", "file_title", "parent_title"],
+            ["item_id", "content", "item_name", "file_title"],
         )
         self.assertEqual(ranker_factory.calls, [((0.9, 0.1), {"norm_score": True})])
 

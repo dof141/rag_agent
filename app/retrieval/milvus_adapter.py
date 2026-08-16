@@ -37,6 +37,7 @@ class MilvusVectorSearch:
             query=query,
             top_k=top_k,
             expr=self._user_expr(),
+            output_fields=["item_id", "content", "item_name", "file_title"],
         )
 
     def search_chunks(
@@ -52,6 +53,13 @@ class MilvusVectorSearch:
             query=query,
             top_k=top_k,
             expr=self._chunk_expr(item_names),
+            output_fields=[
+                "chunk_id",
+                "content",
+                "item_name",
+                "file_title",
+                "parent_title",
+            ],
         )
 
     def _search(
@@ -62,6 +70,7 @@ class MilvusVectorSearch:
         query: SearchQuery,
         top_k: int,
         expr: str,
+        output_fields: list[str],
     ) -> list[SearchHit]:
         try:
             if not query.dense or not query.sparse:
@@ -88,13 +97,7 @@ class MilvusVectorSearch:
                 reqs=reqs,
                 ranker=self._ranker_factory(0.9, 0.1, norm_score=True),
                 limit=top_k,
-                output_fields=[
-                    primary_field,
-                    "content",
-                    "item_name",
-                    "file_title",
-                    "parent_title",
-                ],
+                output_fields=output_fields,
             )
             hits = result_groups[0] if result_groups else []
             return [self._to_search_hit(hit, primary_field) for hit in hits]
