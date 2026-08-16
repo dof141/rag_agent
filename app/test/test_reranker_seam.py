@@ -1,5 +1,6 @@
 import importlib
 import os
+from pathlib import Path
 import sys
 import threading
 import time
@@ -136,6 +137,30 @@ class RerankerConfigTest(unittest.TestCase):
 
         with self.assertRaises(FrozenInstanceError):
             config.adapter = "local"
+
+
+class RerankerSeamTest(unittest.TestCase):
+    def test_env_example_contains_remote_reranker_defaults(self):
+        from dotenv import dotenv_values
+
+        env_path = Path(__file__).resolve().parents[2] / ".env.example"
+        values = dotenv_values(env_path)
+        expected = {
+            "RERANKER_ADAPTER": "http",
+            "RERANKER_MODEL": "BAAI/bge-reranker-v2-m3",
+            "RERANKER_BASE_URL": "https://api.siliconflow.cn/v1",
+            "RERANKER_REQUEST_TIMEOUT": "8",
+            "RERANKER_MAX_DOCUMENTS": "20",
+        }
+
+        self.assertEqual(
+            {key: values.get(key) for key in expected},
+            expected,
+        )
+        self.assertEqual(
+            values.get("RERANKER_API_KEY"),
+            "your_siliconflow_api_key_here",
+        )
 
 
 class RerankerInterfaceTest(unittest.TestCase):
