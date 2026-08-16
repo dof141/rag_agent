@@ -1,7 +1,7 @@
 import unittest
-from types import SimpleNamespace
 
 from qdrant_client import models
+from qdrant_client.http.models import QueryResponse, ScoredPoint
 
 from app.retrieval import SearchHit, SearchQuery, VectorSearchError
 from app.retrieval.qdrant_adapter import QdrantVectorSearch
@@ -17,10 +17,11 @@ class RecordingQdrantClient:
         if self.fail_query:
             raise RuntimeError("provider-detail-must-not-leak")
         self.query_calls.append(kwargs)
-        return SimpleNamespace(
+        return QueryResponse(
             points=[
-                SimpleNamespace(
+                ScoredPoint(
                     id=123,
+                    version=1,
                     score=0.91,
                     payload={
                         "content": "matching content",
@@ -99,6 +100,18 @@ class QdrantVectorSearchTest(unittest.TestCase):
         filters = {condition.key: condition.match for condition in call["query_filter"].must}
         self.assertEqual(filters["user_id"].value, "user-a")
         self.assertEqual(filters["item_name"].any, ["guide", "faq"])
+
+    def test_search_chunks_without_items_searches_all_items_for_bound_user(self):
+        client = RecordingQdrantClient()
+        search = QdrantVectorSearch(self.config(), user_id="user-a", client=client)
+
+        search.search_chunks(self.query(), [], top_k=5)
+
+        self.assertEqual(len(client.query_calls), 1)
+        conditions = client.query_calls[0]["query_filter"].must
+        self.assertEqual(len(conditions), 1)
+        self.assertEqual(conditions[0].key, "user_id")
+        self.assertEqual(conditions[0].match.value, "user-a")
 
     def test_provider_errors_do_not_leak_from_search(self):
         search = QdrantVectorSearch(

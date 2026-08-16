@@ -46,12 +46,16 @@ class QdrantVectorSearch:
             collection_name=self._config.chunks_collection,
             query=query,
             top_k=top_k,
-            filter_conditions=[
-                self._models.FieldCondition(
-                    key="item_name",
-                    match=self._models.MatchAny(any=item_names),
-                )
-            ],
+            filter_conditions=(
+                [
+                    self._models.FieldCondition(
+                        key="item_name",
+                        match=self._models.MatchAny(any=item_names),
+                    )
+                ]
+                if item_names
+                else []
+            ),
         )
 
     def _search(
