@@ -91,6 +91,7 @@ export interface ImportTask {
   created_at: string
   error_msg?: string
   raw_error?: string
+  failed_stage?: string
   total_duration?: number
   nodes: PipelineNodeStatus[]
 }

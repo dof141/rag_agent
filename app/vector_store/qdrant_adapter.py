@@ -30,6 +30,7 @@ class QdrantVectorStore(VectorStore):
                 api_key=config.api_key,
                 prefer_grpc=False,
                 cloud_inference=config.cloud_inference,
+                timeout=config.request_timeout,
             )
         self._client = client
         self._models = models_module
@@ -37,8 +38,14 @@ class QdrantVectorStore(VectorStore):
     def import_document(self, document: VectorDocument) -> VectorImportResult:
         try:
             document.validate(expected_dimension=self._config.dimension, require_sparse=False)
-            item_collection_exists = self._ensure_collection(self._config.item_collection)
-            chunks_collection_exists = self._ensure_collection(self._config.chunks_collection)
+            item_collection_exists = self._ensure_collection(
+                self._config.item_collection,
+                payload_fields=("user_id", "document_id"),
+            )
+            chunks_collection_exists = self._ensure_collection(
+                self._config.chunks_collection,
+                payload_fields=("user_id", "document_id", "item_name"),
+            )
             document_filter = self._document_filter(document)
             if item_collection_exists:
                 self._client.delete(
@@ -70,24 +77,38 @@ class QdrantVectorStore(VectorStore):
         except Exception as exc:
             raise VectorStoreError("Qdrant 向量写入失败") from exc
 
-    def _ensure_collection(self, collection_name: str) -> bool:
-        if self._client.collection_exists(collection_name):
-            return True
-        self._client.create_collection(
-            collection_name=collection_name,
-            vectors_config={
-                "dense": self._models.VectorParams(
-                    size=self._config.dimension,
-                    distance=self._models.Distance.COSINE,
-                )
-            },
-            sparse_vectors_config={
-                "bm25": self._models.SparseVectorParams(
-                    modifier=self._models.Modifier.IDF,
-                )
-            },
-        )
-        return False
+    def _ensure_collection(self, collection_name: str, *, payload_fields: tuple[str, ...]) -> bool:
+        existed = self._client.collection_exists(collection_name)
+        if not existed:
+            self._client.create_collection(
+                collection_name=collection_name,
+                vectors_config={
+                    "dense": self._models.VectorParams(
+                        size=self._config.dimension,
+                        distance=self._models.Distance.COSINE,
+                    )
+                },
+                sparse_vectors_config={
+                    "bm25": self._models.SparseVectorParams(
+                        modifier=self._models.Modifier.IDF,
+                    )
+                },
+            )
+        self._ensure_payload_indexes(collection_name, payload_fields)
+        return existed
+
+    def _ensure_payload_indexes(self, collection_name: str, fields: tuple[str, ...]) -> None:
+        collection = self._client.get_collection(collection_name)
+        payload_schema = collection.payload_schema or {}
+        for field_name in fields:
+            if field_name in payload_schema:
+                continue
+            self._client.create_payload_index(
+                collection_name=collection_name,
+                field_name=field_name,
+                field_schema=self._models.PayloadSchemaType.KEYWORD,
+                wait=True,
+            )
 
     def _document_filter(self, document: VectorDocument):
         return self._models.Filter(
@@ -164,7 +185,7 @@ def _validate_config(config: QdrantVectorStoreConfig) -> None:
         raise VectorStoreConfigurationError("Qdrant URL 或 API Key 缺失")
     if not config.item_collection or not config.chunks_collection:
         raise VectorStoreConfigurationError("Qdrant collection 配置缺失")
-    if config.dimension <= 0 or config.batch_size <= 0:
+    if config.dimension <= 0 or config.batch_size <= 0 or config.request_timeout <= 0:
         raise VectorStoreConfigurationError("Qdrant 数值配置无效")
     if not config.cloud_inference:
         raise VectorStoreConfigurationError("Qdrant BM25 导入要求启用 Cloud Inference")

@@ -10,7 +10,8 @@ class QdrantVectorStoreConfig:
     dimension: int = 1024
     cloud_inference: bool = True
     bm25_model: str = "Qdrant/bm25"
-    batch_size: int = 64
+    batch_size: int = 16
+    request_timeout: float = 30.0
 
 
 @dataclass(frozen=True)

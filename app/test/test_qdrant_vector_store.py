@@ -1,5 +1,6 @@
 import unittest
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from app.vector_store.config import QdrantVectorStoreConfig
 from app.vector_store.interface import (
@@ -59,6 +60,9 @@ class FakeModels:
     class Modifier:
         IDF = "IDF"
 
+    class PayloadSchemaType:
+        KEYWORD = "keyword"
+
     VectorParams = FakeVectorParams
     SparseVectorParams = FakeSparseVectorParams
     Document = FakeDocument
@@ -74,7 +78,9 @@ class RecordingQdrantClient:
         self.created = []
         self.deleted = []
         self.upserts = []
+        self.payload_indexes = []
         self.existing_collections = set()
+        self.payload_schemas = {}
 
     def collection_exists(self, collection_name):
         return collection_name in self.existing_collections
@@ -82,6 +88,16 @@ class RecordingQdrantClient:
     def create_collection(self, **kwargs):
         self.created.append(kwargs)
         self.existing_collections.add(kwargs["collection_name"])
+        self.payload_schemas[kwargs["collection_name"]] = {}
+
+    def get_collection(self, collection_name):
+        return SimpleNamespace(payload_schema=self.payload_schemas.get(collection_name, {}))
+
+    def create_payload_index(self, **kwargs):
+        self.payload_indexes.append(kwargs)
+        self.payload_schemas.setdefault(kwargs["collection_name"], {})[
+            kwargs["field_name"]
+        ] = kwargs["field_schema"]
 
     def delete(self, **kwargs):
         self.deleted.append(kwargs)

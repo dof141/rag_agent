@@ -61,6 +61,16 @@ const CN_NAME_MAP: Record<string, string> = {
   node_import_vector_store: '导入向量库',
 }
 
+const FAILED_STAGE_NODE_MAP: Record<string, string> = {
+  file_validation: 'node_entry',
+  document_parse: 'node_pdf_to_md',
+  image_processing: 'node_md_img',
+  document_split: 'node_document_split',
+  item_name: 'node_item_name_recognition',
+  embedding: 'node_generate_embeddings',
+  vector_store: 'node_import_vector_store',
+}
+
 export class ApiError extends Error {
   readonly status: number
 
@@ -174,21 +184,27 @@ export const api = {
   async getTasks(): Promise<ImportTask[]> {
     const tasks = loadTasksFromStorage()
     let hasChanges = false
+    const missingTaskIds = new Set<string>()
 
     for (const task of tasks) {
-      if (task.status === 'processing' || (task.status === 'failed' && !task.nodes.some(n => n.status === 'failed'))) {
+      if (task.status === 'processing' || (task.status === 'failed' && !task.failed_stage)) {
         try {
           const res = await authFetch(`${API_BASE}/status/${task.task_id}?_=${Date.now()}`)
-          if (res.ok) {
+          if (res.status === 404) {
+            missingTaskIds.add(task.task_id)
+            hasChanges = true
+          } else if (res.ok) {
             const data = await res.json()
             const doneList: string[] = data.done_list || []
             const runningList: string[] = data.running_list || []
             const globalStatus: string = data.status || 'processing'
             const rawErrorMsg: string = data.error || ''
+            const failedStage: string = data.failed_stage || ''
             const nodeDurations: Record<string, number> = data.node_durations || {}
             const totalDuration: number = data.total_duration || 0
 
             task.status = globalStatus === 'completed' ? 'completed' : (globalStatus === 'failed' ? 'failed' : 'processing')
+            task.failed_stage = globalStatus === 'failed' ? (failedStage || 'unknown') : undefined
             task.total_duration = totalDuration
             if (rawErrorMsg) {
               task.error_msg = formatFriendlyErrorMsg(rawErrorMsg)
@@ -196,6 +212,7 @@ export const api = {
             }
 
             let foundFailedNode = false
+            const failedNodeId = FAILED_STAGE_NODE_MAP[failedStage]
             task.nodes.forEach(node => {
               const isDone = isNodeInList(node.node_id, node.name, doneList) || node.node_id === 'upload_file'
               const isRunning = isNodeInList(node.node_id, node.name, runningList)
@@ -207,12 +224,16 @@ export const api = {
               if (isDone) {
                 node.status = 'completed'
               } else if (globalStatus === 'failed' || task.status === 'failed') {
-                if (!foundFailedNode) {
+                const isFailedNode = failedNodeId
+                  ? node.node_id === failedNodeId
+                  : !foundFailedNode
+                if (isFailedNode) {
                   node.status = 'failed'
                   node.error_msg = formatFriendlyErrorMsg(rawErrorMsg) || '后端 LangGraph 节点处理异常'
                   foundFailedNode = true
                 } else {
                   node.status = 'pending'
+                  node.error_msg = undefined
                 }
               } else if (isRunning) {
                 node.status = 'running'
@@ -228,11 +249,15 @@ export const api = {
       }
     }
 
+    const existingTasks = missingTaskIds.size > 0
+      ? tasks.filter(task => !missingTaskIds.has(task.task_id))
+      : tasks
+
     if (hasChanges) {
-      saveTasksToStorage(tasks)
+      saveTasksToStorage(existingTasks)
     }
 
-    return tasks
+    return existingTasks
   },
 
   async retryTask(taskId: string): Promise<boolean> {

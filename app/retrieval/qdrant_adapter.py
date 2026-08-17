@@ -23,6 +23,7 @@ class QdrantVectorSearch:
                 api_key=config.api_key,
                 prefer_grpc=False,
                 cloud_inference=config.cloud_inference,
+                timeout=config.request_timeout,
             )
         self._client = client
         self._models = models_module
