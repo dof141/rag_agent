@@ -117,38 +117,76 @@ class RAGServerManager:
     def _setup_static_frontend(self):
         """挂载打包后的 Vue 3 统一前端静态产物 (frontend/dist)，支持 SPA 路由兜底"""
         dist_path = PROJECT_ROOT / "frontend" / "dist"
-        if not dist_path.exists():
-            logger.info(f"检测到前端打包目录不存在 ({dist_path})，正在自动为您构建 Vue 3 前端产物...")
+        resolved_dist_path = dist_path.resolve()
+        index_file = (resolved_dist_path / "index.html").resolve()
+        if (
+            not index_file.is_relative_to(resolved_dist_path)
+            or not index_file.is_file()
+        ):
+            raise FileNotFoundError(
+                f"前端构建产物不存在: {index_file}。请先运行 frontend 的 npm run build。"
+            )
+
+        logger.info(f"成功托管 Vue 3 统一前端，路径为：{resolved_dist_path}")
+        assets_path = resolved_dist_path / "assets"
+        if assets_path.exists():
+            resolved_assets_path = assets_path.resolve()
+            if not resolved_assets_path.is_relative_to(resolved_dist_path):
+                raise RuntimeError(
+                    f"前端 assets 目录越出构建目录，拒绝托管: {resolved_assets_path}"
+                )
+            if not resolved_assets_path.is_dir():
+                raise FileNotFoundError(
+                    f"前端 assets 路径存在但不是目录: {resolved_assets_path}"
+                )
+            self.app.mount(
+                "/assets",
+                StaticFiles(directory=str(resolved_assets_path)),
+                name="static_assets",
+            )
+
+        index_headers = {
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+        api_path_roots = (
+            "api",
+            "query",
+            "upload",
+            "status",
+            "stream",
+            "history",
+            "health",
+            "mcp",
+            "docs",
+        )
+
+        @self.app.get("/{full_path:path}", include_in_schema=False)
+        async def serve_spa_frontend(full_path: str):
+            # 排除所有后端业务 API 请求，避免强行返回 HTML
+            if full_path == "openapi.json" or any(
+                full_path == root or full_path.startswith(f"{root}/")
+                for root in api_path_roots
+            ):
+                raise HTTPException(status_code=404, detail="API Not Found")
+
+            # 若请求的是具体静态文件（如 favicon.ico），直接返回
             try:
-                import subprocess
-                frontend_dir = PROJECT_ROOT / "frontend"
-                subprocess.run("npm run build", cwd=str(frontend_dir), shell=True, check=True)
-                logger.info("🎉 自动构建 Vue 3 前端成功！")
-            except Exception as e:
-                logger.error(f"自动构建前端失败: {e}，请手动进入 frontend 目录运行 npm run build")
+                target_file = (resolved_dist_path / full_path).resolve()
+            except (OSError, RuntimeError, ValueError):
+                raise HTTPException(
+                    status_code=404, detail="Static file not found"
+                ) from None
+            if not target_file.is_relative_to(resolved_dist_path):
+                raise HTTPException(status_code=404, detail="Static file not found")
+            if target_file.is_file():
+                if target_file == index_file:
+                    return FileResponse(target_file, headers=index_headers)
+                return FileResponse(target_file)
 
-        if dist_path.exists():
-            logger.info(f"成功托管 Vue 3 统一前端，路径为：{dist_path}")
-            assets_path = dist_path / "assets"
-            if assets_path.exists():
-                self.app.mount("/assets", StaticFiles(directory=str(assets_path)), name="static_assets")
-
-            @self.app.get("/{full_path:path}", include_in_schema=False)
-            async def serve_spa_frontend(full_path: str):
-                # 排除所有后端业务 API 请求，避免强行返回 HTML
-                if full_path.startswith(("api/", "query", "upload", "status", "stream", "history", "health", "mcp", "docs", "openapi.json")):
-                    raise HTTPException(status_code=404, detail="API Not Found")
-                
-                # 若请求的是的具体静态文件（如 favicon.ico），直接返回
-                target_file = dist_path / full_path
-                if target_file.exists() and target_file.is_file():
-                    return FileResponse(target_file)
-                
-                # Vue 3 SPA 单页应用路由兜底：一律返回 index.html
-                index_file = dist_path / "index.html"
-                if index_file.exists():
-                    return FileResponse(index_file)
-                raise HTTPException(status_code=404, detail="Frontend index.html not found")
+            # Vue 3 SPA 单页应用路由兜底：一律返回 index.html
+            return FileResponse(index_file, headers=index_headers)
 
     def run(self):
         """启动统一的高性能 Uvicorn 服务"""

@@ -1,21 +1,36 @@
-import subprocess
 import os
-import sys
+import subprocess
 from pathlib import Path
+
 from app.api.server import RAGServerManager
 
-def start_frontend_dev():
-    """在后台子进程中启动 Vue3 开发服务器 (npm run dev)"""
-    frontend_dir = Path(__file__).parent / "frontend"
-    if frontend_dir.exists():
-        print("🚀 正在拉起 Vue 3 前端热重载开发服务器...")
-        # Windows 环境下使用 shell=True 拉起 npm
-        subprocess.Popen("npm run dev", cwd=str(frontend_dir), shell=True)
+
+def build_frontend():
+    """构建后端即将托管的 Vue 3 前端静态产物。"""
+    frontend_dir = Path(__file__).resolve().parent / "frontend"
+    if not frontend_dir.is_dir():
+        raise FileNotFoundError(f"前端目录不存在，无法启动服务: {frontend_dir}")
+
+    package_json = frontend_dir / "package.json"
+    if not package_json.is_file():
+        raise FileNotFoundError(f"前端 package.json 不存在，无法启动服务: {package_json}")
+
+    npm_executable = "npm.cmd" if os.name == "nt" else "npm"
+    try:
+        subprocess.run([npm_executable, "run", "build"], cwd=frontend_dir, check=True)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"前端构建失败（目录: {frontend_dir}，命令: {npm_executable} run build，"
+            f"退出码: {exc.returncode}），后端未启动。"
+        ) from exc
+    except OSError as exc:
+        raise RuntimeError(
+            f"无法执行前端构建（目录: {frontend_dir}，"
+            f"命令: {npm_executable} run build），后端未启动: {exc}"
+        ) from exc
+
 
 if __name__ == "__main__":
-    # 如果处于开发模式，自动开启前端 npm run dev
-    # start_frontend_dev()
-
-    # 启动 8000 后端单端口服务
+    build_frontend()
     server = RAGServerManager(host="127.0.0.1", port=8000)
     server.run()
