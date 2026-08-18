@@ -9,8 +9,6 @@
 
 **GitHub 仓库**: [https://github.com/dof141/rag_agent](https://github.com/dof141/rag_agent)
 
-**在线体验**: [http://121.43.97.230/](http://121.43.97.230/)
-
 ---
 
 ## 📌 项目背景
